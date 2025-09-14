@@ -130,7 +130,6 @@ export default function Page() {
         remainingPrincipal: value.reduce((sum, item) => sum + item.remainingPrincipal, 0),
       }));
       setGroupedData(groupedData);
-      console.debug(groupByMonth);
       setRoundingDecimals(form.roundingDecimals || 2);
       
       // Вычисляем сводку по кредиту
