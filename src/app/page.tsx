@@ -32,7 +32,8 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { BarChart3Icon, CalculatorIcon } from "lucide-react";
+import { BarChart3Icon, CalculatorIcon, CalendarCheck2Icon } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 const LoanInputCard = dynamic(() => import("./loan-input-card"), {
   ssr: false,
@@ -98,6 +99,7 @@ const COLORS = ["#10b981", "#60a5fa"];
 
 export default function Page() {
   const [data, setData] = useState<LoanScheduleEntry[]>([]);
+  const [groupedData, setGroupedData] = useState<LoanScheduleEntry[]>([]);
   const [summary, setSummary] = useState<LoanSummary | null>(null);
   const [roundingDecimals, setRoundingDecimals] = useState(2);
   const [isLoading, setIsLoading] = useState(false);
@@ -119,6 +121,16 @@ export default function Page() {
       });
       
       setData(schedule);
+      let groupByMonth = Object.groupBy(schedule, (item) => format(item.paymentDate, "yyyy-MM"));
+      const groupedData = Object.entries(groupByMonth).map(([key, value]): LoanScheduleEntry => ({
+        paymentDate: new Date(key),
+        paymentAmount: value.reduce((sum, item) => sum + item.paymentAmount, 0),
+        principalAmount: value.reduce((sum, item) => sum + item.principalAmount, 0),
+        interestAmount: value.reduce((sum, item) => sum + item.interestAmount, 0),
+        remainingPrincipal: value.reduce((sum, item) => sum + item.remainingPrincipal, 0),
+      }));
+      setGroupedData(groupedData);
+      console.debug(groupByMonth);
       setRoundingDecimals(form.roundingDecimals || 2);
       
       // Вычисляем сводку по кредиту
@@ -159,7 +171,7 @@ export default function Page() {
   ] : [];
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-800 p-6">
+    <div className="min-h-screen bg-background from-slate-50 to-slate-100 dark:from-slate-900 dark:to-slate-800 p-6">
       <div className="max-w-7xl mx-auto">
         {/* Заголовок */}
         <div className="text-center mb-8">
@@ -326,8 +338,8 @@ export default function Page() {
                           className="aspect-auto h-[400px] w-full"
                         >
                           <AreaChart
-                            data={data.map((value ) => ({
-                              paymentDate: value.paymentDate,
+                            data={groupedData.map((value ) => ({
+                              paymentDate: format(value.paymentDate, "yyyy-MM"),
                               paymentAmount: Number(
                                 value.paymentAmount.toFixed(roundingDecimals)
                               ),
@@ -380,7 +392,6 @@ export default function Page() {
                                     return new Date(value).toLocaleDateString('ru-RU', {
                                       month: "long",
                                       year: "numeric",
-                                      day: "numeric",
                                     });
                                   }}
                                   indicator="dot"
@@ -433,9 +444,28 @@ export default function Page() {
                       isEarlyRepayment: item.isEarlyRepayment,
                     }))}
                     meta={{
-                      getRowStyles: (row: Row<LoanScheduleRow>): CSSProperties => ({
-                        background: row.original.isEarlyRepayment ? "red" : undefined,
+                      getRowStyles: (row: Row<LoanScheduleRow>): CSSProperties & { className?: string } => ({
+                        className : row.original.isEarlyRepayment ? "bg-accent" : undefined,
                       }),
+                      getCellSuffix: (cell) => {
+                        const isNumberColumn = cell.column.id === "month";
+                        const original = cell.row.original as LoanScheduleRow;
+                        if (!isNumberColumn || !original.isEarlyRepayment) return null;
+                        return (
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className="inline-flex items-center text-primary">
+                                  <CalendarCheck2Icon className="h-4 w-4" />
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                Досрочное погашение
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        );
+                      }
                     }}
                   />
                 </div>

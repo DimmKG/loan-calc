@@ -8,6 +8,7 @@ import {
   Row,
   TableMeta,
   useReactTable,
+  Cell as TableCellType,
 } from "@tanstack/react-table"
  
 import {
@@ -19,13 +20,14 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { ScrollArea } from "./scroll-area"
-import { CSSProperties } from "react"
+import { CSSProperties, ReactNode } from "react"
  
 interface DataTableProps<TData, TValue> {
   columns: ColumnDef<TData, TValue>[]
   data: TData[]
   meta?: TableMeta<TData> & {
-    getRowStyles?: (row: Row<TData>) => CSSProperties
+    getRowStyles?: (row: Row<TData>) => CSSProperties & { className?: string }
+    getCellSuffix?: (cell: TableCellType<TData, unknown>) => ReactNode
   }
   initialState?: InitialTableState
 }
@@ -71,12 +73,16 @@ export function DataTable<TData, TValue>({
               table.getRowModel().rows.map((row) => (
                 <TableRow
                   key={row.id}
+                  className={meta?.getRowStyles(row)?.className}
                   data-state={row.getIsSelected() && "selected"}
                   style={meta?.getRowStyles(row)} 
                 >
                   {row.getVisibleCells().map((cell) => (
                     <TableCell key={cell.id}>
-                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                      <div className="flex items-center gap-2">
+                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        {meta?.getCellSuffix?.(cell)}
+                      </div>
                     </TableCell>
                   ))}
                 </TableRow>
