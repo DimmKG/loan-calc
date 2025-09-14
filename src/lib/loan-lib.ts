@@ -102,7 +102,7 @@ export function generateLoanSchedule(params: LoanScheduleParams): {
 
   const paymentDayNumber = params.paymentDayNumber ?? issueDate.getDate();
   const termMonthsToCalculate = interestOnlyFirstPeriod
-    ? termMonths - 2
+    ? termMonths - 1
     : termMonths;
   let sharedParams: LoanCalcSharedParams = {
     loanType,
