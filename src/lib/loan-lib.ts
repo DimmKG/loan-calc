@@ -113,7 +113,7 @@ export function generateLoanSchedule(params: LoanScheduleParams): {
     termMonthsToCalculate,
     monthlyInterestRate: annualInterestRatePercent / 12 / 100,
     annualInterestRatePercent,
-    amortizationPrincipal: principal / termMonthsToCalculate,
+    amortizationPrincipal: roundDecimals(principal / termMonthsToCalculate, roundingDecimals),
     annuityMonthlyPayment: calculateAnnuityMonthlyPayment({
       principal,
       monthlyInterestRate: annualInterestRatePercent / 12 / 100,

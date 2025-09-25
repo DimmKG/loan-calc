@@ -36,6 +36,6 @@ npm run build
 
 ## Запуск dev сервера
 ```bash
-npm run start
+npm run dev
 ```
 
