@@ -6,6 +6,7 @@ import { CSSProperties, useCallback, useState } from "react";
 import { LoanInputForm } from "../types/loan-input-form.type";
 import { ColumnDef, Row } from "@tanstack/react-table";
 import { differenceInMonths, format } from "date-fns";
+import { generateLoanScheduleCSV } from "@/lib/utils";
 import dynamic from "next/dynamic";
 import {
   ChartConfig,
@@ -32,7 +33,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { BarChart3Icon, CalculatorIcon, CalendarCheck2Icon } from "lucide-react";
+import { BarChart3Icon, CalculatorIcon, CalendarCheck2Icon, Download } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 const LoanInputCard = dynamic(() => import("./loan-input-card"), {
@@ -164,6 +165,21 @@ export default function Page() {
       setIsLoading(false);
     }, 200);
   }, [data])
+
+  const handleExportCSV = useCallback(() => {
+    if (data.length === 0) return;
+
+    const csvContent = generateLoanScheduleCSV(data, roundingDecimals);
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `loan-schedule-${format(new Date(), "yyyy-MM-dd")}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }, [data, roundingDecimals]);
 
   const pieChartData = summary ? [
     { name: "Основной долг", value: summary.totalPrincipal },
@@ -425,10 +441,24 @@ export default function Page() {
             {/* Таблица платежей */}
             <Card>
               <CardHeader>
-                <CardTitle>Таблица платежей</CardTitle>
-                <CardDescription>
-                  Детальный график платежей по кредиту
-                </CardDescription>
+                <div className="flex justify-between items-start">
+                  <div>
+                    <CardTitle>Таблица платежей</CardTitle>
+                    <CardDescription>
+                      Детальный график платежей по кредиту
+                    </CardDescription>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleExportCSV}
+                    title="Экспортировать таблицу в CSV"
+                  >
+                    <Download className="h-4 w-4" />
+                    <span className="hidden sm:inline">Экспорт CSV</span>
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent>
                 <div className="max-h-96 overflow-auto">
@@ -478,7 +508,7 @@ export default function Page() {
         <footer className="mt-16 pt-8 border-t border-slate-200 dark:border-slate-700">
           <div className="text-center text-sm text-slate-600 dark:text-slate-400">
             <p className="mb-2">
-              © 2025 DimmKG. Лицензия AGPL-3.0
+              © 2026 DimmKG. Лицензия AGPL-3.0
             </p>
             <p>
               <a 
