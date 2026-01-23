@@ -51,9 +51,11 @@ export interface LoanCalcSharedParams {
   amortizationPrincipal: number;
   annuityMonthlyPayment: number;
   remainingInterestAmount: number;
+  monthNumber: number;
 }
 
 export interface LoanScheduleEntry {
+  monthNumber: number
   paymentDate: Date;
   paymentAmount: number;
   interestAmount: number;
@@ -123,6 +125,7 @@ export function generateLoanSchedule(params: LoanScheduleParams): {
     remainingInterestAmount: 0,
     roundingDecimals,
     dayCountBasis,
+    monthNumber: 1,
   };
 
   const startMonthlyPayment =
@@ -187,6 +190,7 @@ export function generateLoanSchedule(params: LoanScheduleParams): {
 
     if (remainingTermMonths === termMonths && interestOnlyFirstPeriod) {
       schedule.push({
+        monthNumber: sharedParams.monthNumber,
         paymentDate: sharedParams.nextDate,
         paymentAmount: interestAmount,
         interestAmount: interestAmount,
@@ -200,6 +204,7 @@ export function generateLoanSchedule(params: LoanScheduleParams): {
         paymentDayNumber,
         moveHolidayToNextDay
       );
+      sharedParams.monthNumber = sharedParams.monthNumber + 1;
       remainingTermMonths = remainingTermMonths - 1;
       continue;
     }
@@ -210,6 +215,7 @@ export function generateLoanSchedule(params: LoanScheduleParams): {
         sharedParams.remainingPrincipal <= sharedParams.annuityMonthlyPayment)
     ) {
       schedule.push({
+        monthNumber: sharedParams.monthNumber,
         paymentDate: sharedParams.nextDate,
         paymentAmount: roundDecimals(
           sharedParams.remainingPrincipal + interestAmount,
@@ -232,6 +238,7 @@ export function generateLoanSchedule(params: LoanScheduleParams): {
         roundingDecimals
       );
       schedule.push({
+        monthNumber: sharedParams.monthNumber,
         paymentDate: sharedParams.nextDate,
         paymentAmount: sharedParams.annuityMonthlyPayment,
         interestAmount: interestAmount,
@@ -249,6 +256,7 @@ export function generateLoanSchedule(params: LoanScheduleParams): {
         roundingDecimals
       );
       schedule.push({
+        monthNumber: sharedParams.monthNumber,
         paymentDate: sharedParams.nextDate,
         paymentAmount,
         interestAmount: interestAmount,
@@ -264,6 +272,7 @@ export function generateLoanSchedule(params: LoanScheduleParams): {
       paymentDayNumber,
       moveHolidayToNextDay
     );
+    sharedParams.monthNumber= sharedParams.monthNumber + 1;
     remainingTermMonths = remainingTermMonths - 1;
   }
 
@@ -476,6 +485,7 @@ function applyEarlyRepayment(
     );
 
     loanSchedule.push({
+      monthNumber: sharedParams.monthNumber,
       paymentDate: earlyRepayment.earlyRepaymentDate,
       paymentAmount: earlyRepayment.earlyRepaymentAmount,
       interestAmount: earlyRepayment.earlyRepaymentAmount,
@@ -502,6 +512,7 @@ function applyEarlyRepayment(
       updatedSharedParams.remainingPrincipal = 0;
     }
     loanSchedule.push({
+      monthNumber: sharedParams.monthNumber,
       paymentDate: earlyRepayment.earlyRepaymentDate,
       paymentAmount,
       interestAmount,

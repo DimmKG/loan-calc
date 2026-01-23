@@ -25,8 +25,8 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { ChevronsUpDown, Plus, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { ChevronsUpDown, Plus, Trash2, Download, Upload } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { FormMessage } from "@/components/ui/form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -194,7 +194,7 @@ export default function LoanInputCard({
     return () => subscription.unsubscribe();
   }, [form]);
 
-  const addEarlyRepayment = () => {
+  const addEarlyRepayment = useCallback(() => {
     const newId = `er-${Date.now()}`;
     const currentEarlyRepayments = form.getValues("earlyRepayments") || [];
     form.setValue("earlyRepayments", [
@@ -207,24 +207,153 @@ export default function LoanInputCard({
         earlyRepaymentAmount: 0,
       },
     ]);
-  };
+  }, [form]);
 
-  const removeEarlyRepayment = (id: string) => {
+  const removeEarlyRepayment = useCallback((id: string) => {
     const currentEarlyRepayments = form.getValues("earlyRepayments") || [];
     form.setValue(
       "earlyRepayments",
       currentEarlyRepayments.filter((er) => er.id !== id)
     );
-  };
+  }, [form]);
 
   function onSubmit(data: LoanInputForm) {
     onFormSubmit?.(data);
   }
 
+  const handleExport = () => {
+    const formData = form.getValues();
+    const exportData = {
+      ...formData,
+      issueDate: format(formData.issueDate, "yyyy-MM-dd"),
+      earlyRepayments: (formData.earlyRepayments || []).map((er) => ({
+        id: er.id,
+        earlyRepaymentDateStart: format(er.earlyRepaymentDateStart, "yyyy-MM-dd"),
+        earlyRepaymentDateEnd: er.earlyRepaymentDateEnd
+          ? format(er.earlyRepaymentDateEnd, "yyyy-MM-dd")
+          : undefined,
+        periodicity: er.periodicity,
+        earlyRepaymentAmount: er.earlyRepaymentAmount,
+        repaymentType: er.repaymentType,
+      })),
+    };
+
+    const jsonString = JSON.stringify(exportData, null, 2);
+    const blob = new Blob([jsonString], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `loan-settings-${format(new Date(), "yyyy-MM-dd")}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImport = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const jsonString = e.target?.result as string;
+        const importedData = JSON.parse(jsonString);
+
+        // Преобразуем данные в формат формы
+        const formData: LoanInputForm = {
+          loanAmount: Number(importedData.loanAmount) || 100000,
+          loanTerm: Number(importedData.loanTerm) || 12,
+          loanTermType: importedData.loanTermType === "y" ? "y" : "m",
+          loanType:
+            importedData.loanType === "AMORTIZATION" ? "AMORTIZATION" : "ANNUITY",
+          interestRate: Number(importedData.interestRate) || 10,
+          dayCountBasis: ["ACTUAL_365", "ACTUAL_360", "ACTUAL_ACTUAL"].includes(
+            importedData.dayCountBasis
+          )
+            ? importedData.dayCountBasis
+            : "ACTUAL_365",
+          roundingDecimals:
+            importedData.roundingDecimals === "" ||
+            importedData.roundingDecimals == null
+              ? 2
+              : Number(importedData.roundingDecimals),
+          issueDate: importedData.issueDate
+            ? new Date(importedData.issueDate)
+            : new Date(),
+          paymentDayNumber: importedData.paymentDayNumber
+            ? Number(importedData.paymentDayNumber)
+            : 20,
+          interestOnlyFirstPeriod: Boolean(importedData.interestOnlyFirstPeriod),
+          moveHolidayToNextDay: Boolean(importedData.moveHolidayToNextDay),
+          earlyRepayments: (importedData.earlyRepayments || []).map((er: any) => ({
+            id: er.id || `er-${Date.now()}-${Math.random()}`,
+            earlyRepaymentDateStart: er.earlyRepaymentDateStart
+              ? new Date(er.earlyRepaymentDateStart)
+              : new Date(),
+            earlyRepaymentDateEnd: er.earlyRepaymentDateEnd
+              ? new Date(er.earlyRepaymentDateEnd)
+              : undefined,
+            periodicity: er.periodicity || "MONTHLY",
+            earlyRepaymentAmount: er.earlyRepaymentAmount || 0,
+            repaymentType: er.repaymentType || "DECREASE_PAYMENT",
+          })),
+        };
+
+        // Заполняем форму
+        form.reset(formData);
+
+        // Автоматически запускаем расчет
+        setTimeout(() => {
+          form.handleSubmit(onSubmit)();
+        }, 100);
+      } catch (error) {
+        console.error("Ошибка при импорте файла:", error);
+        alert("Ошибка при импорте файла");
+      }
+    };
+    reader.readAsText(file);
+    // Сбрасываем значение input, чтобы можно было загрузить тот же файл снова
+    event.target.value = "";
+  };
+
   return (
     <Card className="w-full">
       <CardHeader>
-        <CardTitle className="text-center text-xl">Настройки кредита</CardTitle>
+        <div className="flex justify-between items-center">
+          <CardTitle className="text-xl">Настройки кредита</CardTitle>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleExport}
+              title="Экспортировать настройки в JSON"
+            >
+              <Download className="h-4 w-4" />
+              <span className="hidden sm:inline">Экспорт</span>
+            </Button>
+            <div>
+              <input
+                id="import-file-input"
+                type="file"
+                accept=".json"
+                onChange={handleImport}
+                className="hidden"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => document.getElementById("import-file-input")?.click()}
+                title="Импортировать настройки из JSON"
+              >
+                <Upload className="h-4 w-4" />
+                <span className="hidden sm:inline">Импорт</span>
+              </Button>
+            </div>
+          </div>
+        </div>
       </CardHeader>
       <CardContent>
         <Form {...form}>

@@ -2,7 +2,7 @@
 
 import { DataTable } from "@/components/ui/data-table";
 import { LoanScheduleEntry, generateLoanSchedule } from "@/lib/loan-lib";
-import { CSSProperties, useState } from "react";
+import { CSSProperties, useCallback, useState } from "react";
 import { LoanInputForm } from "../types/loan-input-form.type";
 import { ColumnDef, Row } from "@tanstack/react-table";
 import { differenceInMonths, format } from "date-fns";
@@ -105,7 +105,7 @@ export default function Page() {
   const [isLoading, setIsLoading] = useState(false);
   const [isChartOpen, setIsChartOpen] = useState(false);
 
-  function onFormSubmit(form: LoanInputForm) {
+  const onFormSubmit = useCallback((form: LoanInputForm) => {
     setIsLoading(true);
     setData([]);
     setSummary(null);
@@ -123,6 +123,7 @@ export default function Page() {
       setData(schedule);
       let groupByMonth = Object.groupBy(schedule, (item) => format(item.paymentDate, "yyyy-MM"));
       const groupedData = Object.entries(groupByMonth).map(([key, value]): LoanScheduleEntry => ({
+        monthNumber: value[0].monthNumber,
         paymentDate: new Date(key),
         paymentAmount: value.reduce((sum, item) => sum + item.paymentAmount, 0),
         principalAmount: value.reduce((sum, item) => sum + item.principalAmount, 0),
@@ -162,7 +163,7 @@ export default function Page() {
       
       setIsLoading(false);
     }, 200);
-  }
+  }, [data])
 
   const pieChartData = summary ? [
     { name: "Основной долг", value: summary.totalPrincipal },
@@ -433,8 +434,8 @@ export default function Page() {
                 <div className="max-h-96 overflow-auto">
                   <DataTable
                     columns={columns}
-                    data={data.map((item, index) => ({
-                      month: index + 1,
+                    data={data.map((item) => ({
+                      month: item.monthNumber,
                       paymentDate: format(item.paymentDate, "dd.MM.yyyy"),
                       paymentAmount: item.paymentAmount.toFixed(roundingDecimals),
                       principalAmount: item.principalAmount.toFixed(roundingDecimals),
