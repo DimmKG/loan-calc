@@ -14,16 +14,13 @@ export function generateLoanScheduleCSV(
   if (data.length === 0) return "";
 
   // Заголовки CSV
-  const headers = ["№", "Дата", "Платеж", "Основной долг", "Проценты", "Остаток"];
+  const headers = ["№", "Тип", "Дата", "Платеж", "Основной долг", "Проценты", "Остаток"];
   
   // Создаем строки данных
   const rows = data.map((item) => {
-    const monthNumber = item.isEarlyRepayment 
-      ? `${item.monthNumber} ДП`
-      : item.monthNumber.toString();
-    
     return [
-      monthNumber,
+      item.monthNumber.toString(),
+      item.isEarlyRepayment ? "ДП" : "ОП",
       format(item.paymentDate, "dd.MM.yyyy"),
       item.paymentAmount.toFixed(roundingDecimals),
       item.principalAmount.toFixed(roundingDecimals),
