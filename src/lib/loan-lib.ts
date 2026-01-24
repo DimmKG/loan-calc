@@ -54,10 +54,11 @@ export interface LoanCalcSharedParams {
   annuityMonthlyPayment: number;
   remainingInterestAmount: number;
   monthNumber: number;
+  remainingTermMonths: number;
 }
 
 export interface LoanScheduleEntry {
-  monthNumber: number
+  monthNumber: number;
   paymentDate: Date;
   paymentAmount: number;
   interestAmount: number;
@@ -71,7 +72,9 @@ export interface LoanScheduleResult {
   startMonthlyPayment: number;
 }
 
-export function generateLoanSchedule(params: LoanScheduleParams): LoanScheduleResult {
+export function generateLoanSchedule(
+  params: LoanScheduleParams
+): LoanScheduleResult {
   const schedule: LoanScheduleEntry[] = [];
 
   const {
@@ -119,7 +122,10 @@ export function generateLoanSchedule(params: LoanScheduleParams): LoanScheduleRe
     termMonthsToCalculate,
     monthlyInterestRate: annualInterestRatePercent / 12 / 100,
     annualInterestRatePercent,
-    amortizationPrincipal: roundDecimals(principal / termMonthsToCalculate, roundingDecimals),
+    amortizationPrincipal: roundDecimals(
+      principal / termMonthsToCalculate,
+      roundingDecimals
+    ),
     annuityMonthlyPayment: calculateAnnuityMonthlyPayment({
       principal,
       monthlyInterestRate: annualInterestRatePercent / 12 / 100,
@@ -130,6 +136,7 @@ export function generateLoanSchedule(params: LoanScheduleParams): LoanScheduleRe
     roundingDecimals,
     dayCountBasis,
     monthNumber: 1,
+    remainingTermMonths: termMonths,
   };
 
   const startMonthlyPayment =
@@ -137,9 +144,7 @@ export function generateLoanSchedule(params: LoanScheduleParams): LoanScheduleRe
       ? sharedParams.annuityMonthlyPayment
       : sharedParams.amortizationPrincipal;
 
-  let remainingTermMonths = termMonths;
-
-  while (remainingTermMonths > 0) {
+  while (sharedParams.remainingTermMonths > 0) {
     sharedParams.remainingInterestAmount = 0;
     const nextEarlyRepayment = getNextEarlyRepayment(
       earlyRepaymentRecords,
@@ -147,13 +152,27 @@ export function generateLoanSchedule(params: LoanScheduleParams): LoanScheduleRe
       sharedParams.nextDate
     );
 
-    if (nextEarlyRepayment.length > 0) {
+    // Разделяем досрочные платежи на те, что до nextDate, и те, что в nextDate
+    const earlyRepaymentsBeforeNextDate = nextEarlyRepayment.filter(
+      (er) => !isSameDay(er.earlyRepaymentDate, sharedParams.nextDate)
+    );
+    const earlyRepaymentsOnNextDate = nextEarlyRepayment.filter((er) =>
+      isSameDay(er.earlyRepaymentDate, sharedParams.nextDate)
+    );
+
+    // Сначала обрабатываем досрочные платежи, которые до nextDate
+    if (earlyRepaymentsBeforeNextDate.length > 0) {
       const {
         updatedSharedParams,
         loanSchedule,
         deletedEarlyRepayments,
         updatedEarlyRepayments,
-      } = applyEarlyRepayments(sharedParams, nextEarlyRepayment, issueDate, paymentDayNumber);
+      } = applyEarlyRepayments(
+        sharedParams,
+        earlyRepaymentsBeforeNextDate,
+        issueDate,
+        paymentDayNumber
+      );
       sharedParams = updatedSharedParams;
       schedule.push(...loanSchedule);
 
@@ -192,34 +211,79 @@ export function generateLoanSchedule(params: LoanScheduleParams): LoanScheduleRe
             roundingDecimals
           );
 
-    if (remainingTermMonths === termMonths && interestOnlyFirstPeriod) {
+    // Первый месяц - только проценты
+    if (sharedParams.monthNumber === 1 && interestOnlyFirstPeriod) {
       schedule.push({
-        monthNumber: calculateMonthNumber(sharedParams.nextDate, false, sharedParams.monthNumber, issueDate, paymentDayNumber),
+        monthNumber: calculateMonthNumber(
+          sharedParams.nextDate,
+          false,
+          sharedParams.monthNumber,
+          issueDate,
+          paymentDayNumber
+        ),
         paymentDate: sharedParams.nextDate,
         paymentAmount: interestAmount,
         interestAmount: interestAmount,
         principalAmount: 0,
         remainingPrincipal: sharedParams.remainingPrincipal,
       });
-      sharedParams.previousDate = sharedParams.currentDate;
-      sharedParams.currentDate = sharedParams.nextDate;
-      sharedParams.nextDate = moveToNextDate(
+
+      // Обрабатываем досрочные платежи в тот же день после основного платежа
+      const earlyRepaymentsOnNextDate = getNextEarlyRepayment(
+        earlyRepaymentRecords,
         sharedParams.currentDate,
+        sharedParams.nextDate
+      ).filter((er) => isSameDay(er.earlyRepaymentDate, sharedParams.nextDate));
+
+      if (earlyRepaymentsOnNextDate.length > 0) {
+        const {
+          updatedSharedParams,
+          loanSchedule,
+          deletedEarlyRepayments,
+          updatedEarlyRepayments,
+        } = applyEarlyRepayments(
+          sharedParams,
+          earlyRepaymentsOnNextDate,
+          issueDate,
+          paymentDayNumber
+        );
+        sharedParams = updatedSharedParams;
+        schedule.push(...loanSchedule);
+
+        if (deletedEarlyRepayments.length > 0) {
+          for (const deletedEarlyRepayment of deletedEarlyRepayments) {
+            delete earlyRepaymentRecords[deletedEarlyRepayment.id];
+          }
+        }
+        if (updatedEarlyRepayments.length > 0) {
+          for (const updatedEarlyRepayment of updatedEarlyRepayments) {
+            earlyRepaymentRecords[updatedEarlyRepayment.id] =
+              updatedEarlyRepayment;
+          }
+        }
+      }
+
+      sharedParams = updateParamsOnNextDate(
+        sharedParams,
         paymentDayNumber,
         moveHolidayToNextDay
       );
-      sharedParams.monthNumber = sharedParams.monthNumber + 1;
-      remainingTermMonths = remainingTermMonths - 1;
       continue;
     }
 
     if (
-      remainingTermMonths === 1 ||
+      sharedParams.remainingTermMonths === 1 ||
       (loanType === "ANNUITY" &&
         sharedParams.remainingPrincipal <= sharedParams.annuityMonthlyPayment)
     ) {
       schedule.push({
-        monthNumber: calculateMonthNumber(sharedParams.nextDate, false, sharedParams.monthNumber, issueDate, paymentDayNumber),
+        monthNumber: calculateMonthNumber(
+          sharedParams.nextDate,
+          false,
+          sharedParams.monthNumber,
+          issueDate,
+          paymentDayNumber
+        ),
         paymentDate: sharedParams.nextDate,
         paymentAmount: roundDecimals(
           sharedParams.remainingPrincipal + interestAmount,
@@ -229,6 +293,7 @@ export function generateLoanSchedule(params: LoanScheduleParams): LoanScheduleRe
         principalAmount: sharedParams.remainingPrincipal,
         remainingPrincipal: 0,
       });
+
       break;
     }
 
@@ -242,7 +307,13 @@ export function generateLoanSchedule(params: LoanScheduleParams): LoanScheduleRe
         roundingDecimals
       );
       schedule.push({
-        monthNumber: calculateMonthNumber(sharedParams.nextDate, false, sharedParams.monthNumber, issueDate, paymentDayNumber),
+        monthNumber: calculateMonthNumber(
+          sharedParams.nextDate,
+          false,
+          sharedParams.monthNumber,
+          issueDate,
+          paymentDayNumber
+        ),
         paymentDate: sharedParams.nextDate,
         paymentAmount: sharedParams.annuityMonthlyPayment,
         interestAmount: interestAmount,
@@ -260,7 +331,13 @@ export function generateLoanSchedule(params: LoanScheduleParams): LoanScheduleRe
         roundingDecimals
       );
       schedule.push({
-        monthNumber: calculateMonthNumber(sharedParams.nextDate, false, sharedParams.monthNumber, issueDate, paymentDayNumber),
+        monthNumber: calculateMonthNumber(
+          sharedParams.nextDate,
+          false,
+          sharedParams.monthNumber,
+          issueDate,
+          paymentDayNumber
+        ),
         paymentDate: sharedParams.nextDate,
         paymentAmount,
         interestAmount: interestAmount,
@@ -269,15 +346,44 @@ export function generateLoanSchedule(params: LoanScheduleParams): LoanScheduleRe
       });
     }
 
-    sharedParams.previousDate = sharedParams.currentDate;
-    sharedParams.currentDate = sharedParams.nextDate;
-    sharedParams.nextDate = moveToNextDate(
-      sharedParams.currentDate,
+    // Обрабатываем досрочные платежи в тот же день после основного платежа
+    if (earlyRepaymentsOnNextDate.length > 0) {
+      const {
+        updatedSharedParams,
+        loanSchedule,
+        deletedEarlyRepayments,
+        updatedEarlyRepayments,
+      } = applyEarlyRepayments(
+        sharedParams,
+        earlyRepaymentsOnNextDate,
+        issueDate,
+        paymentDayNumber
+      );
+      sharedParams = updatedSharedParams;
+      schedule.push(...loanSchedule);
+
+      if (deletedEarlyRepayments.length > 0) {
+        for (const deletedEarlyRepayment of deletedEarlyRepayments) {
+          delete earlyRepaymentRecords[deletedEarlyRepayment.id];
+        }
+      }
+      if (updatedEarlyRepayments.length > 0) {
+        for (const updatedEarlyRepayment of updatedEarlyRepayments) {
+          earlyRepaymentRecords[updatedEarlyRepayment.id] =
+            updatedEarlyRepayment;
+        }
+      }
+    }
+
+    if (sharedParams.remainingPrincipal <= 0) {
+      break;
+    }
+
+    sharedParams = updateParamsOnNextDate(
+      sharedParams,
       paymentDayNumber,
       moveHolidayToNextDay
     );
-    sharedParams.monthNumber = sharedParams.monthNumber + 1;
-    remainingTermMonths = remainingTermMonths - 1;
   }
 
   return {
@@ -286,7 +392,28 @@ export function generateLoanSchedule(params: LoanScheduleParams): LoanScheduleRe
   };
 }
 
-export function moveToNextDate(
+function updateParamsOnNextDate(
+  sharedParams: LoanCalcSharedParams,
+  paymentDayNumber: number,
+  moveHolidayToNextDay: boolean
+): LoanCalcSharedParams {
+  sharedParams.previousDate = sharedParams.currentDate;
+  sharedParams.currentDate = sharedParams.nextDate;
+  sharedParams.nextDate = moveToNextDate(
+    sharedParams.currentDate,
+    paymentDayNumber,
+    moveHolidayToNextDay
+  );
+  sharedParams.monthNumber += 1;
+  sharedParams.remainingTermMonths -= 1;
+  sharedParams.termMonthsToCalculate -=1;
+  if(sharedParams.termMonthsToCalculate < 0) {
+    sharedParams.termMonthsToCalculate = 0
+  }
+  return sharedParams;
+}
+
+function moveToNextDate(
   currentDate: Date,
   paymentDayNumber: number,
   moveHolidayToNextDay: boolean
@@ -313,16 +440,17 @@ export function calculateAnnuityMonthlyPayment(dto: {
   roundingDecimals: number;
 }): number {
   const { principal, monthlyInterestRate, termMonths, roundingDecimals } = dto;
-  return roundDecimals(
+  const result = roundDecimals(
     (principal *
       monthlyInterestRate *
       Math.pow(1 + monthlyInterestRate, termMonths)) /
       (Math.pow(1 + monthlyInterestRate, termMonths) - 1),
     roundingDecimals
   );
+  return result;
 }
 
-export function getMonthDaysAndYearDays(
+function getMonthDaysAndYearDays(
   paymentDate: Date,
   dayCountBasis: "ACTUAL_365" | "ACTUAL_360" | "ACTUAL_ACTUAL"
 ): { daysInYear: number; daysInMonth: number } {
@@ -342,8 +470,69 @@ export function getMonthDaysAndYearDays(
   return { daysInYear, daysInMonth };
 }
 
-export function roundDecimals(value: number, decimals: number): number {
+function roundDecimals(value: number, decimals: number): number {
   return Math.round(value * Math.pow(10, decimals)) / Math.pow(10, decimals);
+}
+
+/**
+ * Вычисляет количество месяцев, на которое уменьшается срок кредита
+ * при досрочном погашении указанной суммы основного долга.
+ *
+ * Формула: вычисляем разницу между сроком до и после досрочного платежа.
+ * n_before = -log(1 - remainingPrincipal * r / A) / log(1 + r)
+ * n_after = -log(1 - (remainingPrincipal - principalAmountPaid) * r / A) / log(1 + r)
+ * monthsReduction = n_before - n_after
+ */
+function calculateMonthsReduction(
+  principalAmountPaid: number,
+  remainingPrincipal: number,
+  monthlyInterestRate: number,
+  annuityMonthlyPayment: number
+): number {
+  if (principalAmountPaid <= 0 || remainingPrincipal <= 0) {
+    return 0;
+  }
+
+  if (monthlyInterestRate <= 0 || annuityMonthlyPayment <= 0) {
+    return 0;
+  }
+
+  // Вычисляем срок кредита ДО досрочного платежа
+  const ratioBefore =
+    (remainingPrincipal * monthlyInterestRate) / annuityMonthlyPayment;
+  if (ratioBefore >= 1 || ratioBefore <= 0) {
+    return 0;
+  }
+  const monthsBefore =
+    -Math.log(1 - ratioBefore) / Math.log(1 + monthlyInterestRate);
+
+  // Вычисляем срок кредита ПОСЛЕ досрочного платежа
+  const remainingPrincipalAfter = remainingPrincipal - principalAmountPaid;
+  if (remainingPrincipalAfter <= 0) {
+    // Если досрочный платёж полностью погашает долг
+    return Math.ceil(monthsBefore);
+  }
+
+  const ratioAfter =
+    (remainingPrincipalAfter * monthlyInterestRate) / annuityMonthlyPayment;
+  if (ratioAfter >= 1 || ratioAfter <= 0) {
+    return 0;
+  }
+  const monthsAfter =
+    -Math.log(1 - ratioAfter) / Math.log(1 + monthlyInterestRate);
+
+  // Разница - это количество месяцев, на которое уменьшился срок
+  const monthsReduction = monthsBefore - monthsAfter;
+  console.log(
+    {
+      principalAmountPaid,
+      remainingPrincipal,
+      monthlyInterestRate,
+      annuityMonthlyPayment,
+    },
+    Math.floor(monthsReduction)
+  );
+  return Math.max(0, Math.floor(monthsReduction));
 }
 
 function getNextEarlyRepayment(
@@ -358,33 +547,8 @@ function getNextEarlyRepayment(
   const orderByDate = (a: EarlyRepaymentRecord, b: EarlyRepaymentRecord) => {
     return a.earlyRepaymentDate.getTime() - b.earlyRepaymentDate.getTime();
   };
-  const onceEarlyRepayments = earlyRepayments
-    .filter((earlyRepayment) => {
-      return earlyRepayment.periodicity === "ONCE";
-    })
-    .sort(orderByDate);
-  const monthlyEarlyRepayments = earlyRepayments
-    .filter((earlyRepayment) => {
-      return earlyRepayment.periodicity === "MONTHLY";
-    })
-    .sort(orderByDate);
-  const quarterlyEarlyRepayments = earlyRepayments
-    .filter((earlyRepayment) => {
-      return earlyRepayment.periodicity === "QUARTERLY";
-    })
-    .sort(orderByDate);
-  const yearlyEarlyRepayments = earlyRepayments
-    .filter((earlyRepayment) => {
-      return earlyRepayment.periodicity === "YEARLY";
-    })
-    .sort(orderByDate);
 
-  const nextRepayments = [
-    onceEarlyRepayments[0],
-    monthlyEarlyRepayments[0],
-    quarterlyEarlyRepayments[0],
-    yearlyEarlyRepayments[0],
-  ]
+  const nextRepayments = earlyRepayments
     .filter((earlyRepayment) => {
       if (!earlyRepayment) {
         return false;
@@ -424,7 +588,12 @@ function applyEarlyRepayments(
   const loanSchedule = [];
 
   for (const earlyRepayment of orderedEarlyRepayments) {
-    const result = applyEarlyRepayment(sharedParams, earlyRepayment, issueDate, paymentDayNumber);
+    const result = applyEarlyRepayment(
+      sharedParams,
+      earlyRepayment,
+      issueDate,
+      paymentDayNumber
+    );
     updatedSharedParams = result.updatedSharedParams;
     loanSchedule.push(...result.loanSchedule);
     if (updatedSharedParams.remainingPrincipal <= 0) {
@@ -486,6 +655,8 @@ function applyEarlyRepayment(
     sharedParams.roundingDecimals
   );
 
+  let principalAmountPaid = 0;
+
   if (earlyRepayment.earlyRepaymentAmount <= interestAmount) {
     updatedSharedParams.remainingInterestAmount = roundDecimals(
       interestAmount - earlyRepayment.earlyRepaymentAmount,
@@ -493,7 +664,14 @@ function applyEarlyRepayment(
     );
 
     loanSchedule.push({
-      monthNumber: calculateMonthNumber(earlyRepayment.earlyRepaymentDate, true, sharedParams.monthNumber, issueDate, paymentDayNumber, sharedParams.nextDate),
+      monthNumber: calculateMonthNumber(
+        earlyRepayment.earlyRepaymentDate,
+        true,
+        sharedParams.monthNumber,
+        issueDate,
+        paymentDayNumber,
+        sharedParams.nextDate
+      ),
       paymentDate: earlyRepayment.earlyRepaymentDate,
       paymentAmount: earlyRepayment.earlyRepaymentAmount,
       interestAmount: earlyRepayment.earlyRepaymentAmount,
@@ -503,28 +681,35 @@ function applyEarlyRepayment(
     });
   } else {
     let paymentAmount = earlyRepayment.earlyRepaymentAmount;
-    let principalAmount = roundDecimals(
+    principalAmountPaid = roundDecimals(
       earlyRepayment.earlyRepaymentAmount - interestAmount,
       sharedParams.roundingDecimals
     );
 
     updatedSharedParams.remainingPrincipal = roundDecimals(
-      updatedSharedParams.remainingPrincipal - principalAmount,
+      updatedSharedParams.remainingPrincipal - principalAmountPaid,
       sharedParams.roundingDecimals
     );
 
     if (updatedSharedParams.remainingPrincipal < 0) {
-      principalAmount =
-        principalAmount + updatedSharedParams.remainingPrincipal;
+      principalAmountPaid =
+        principalAmountPaid + updatedSharedParams.remainingPrincipal;
       paymentAmount = paymentAmount + updatedSharedParams.remainingPrincipal;
       updatedSharedParams.remainingPrincipal = 0;
     }
     loanSchedule.push({
-      monthNumber: calculateMonthNumber(earlyRepayment.earlyRepaymentDate, true, sharedParams.monthNumber, issueDate, paymentDayNumber, sharedParams.nextDate),
+      monthNumber: calculateMonthNumber(
+        earlyRepayment.earlyRepaymentDate,
+        true,
+        sharedParams.monthNumber,
+        issueDate,
+        paymentDayNumber,
+        sharedParams.nextDate
+      ),
       paymentDate: earlyRepayment.earlyRepaymentDate,
       paymentAmount,
       interestAmount,
-      principalAmount,
+      principalAmount: principalAmountPaid,
       remainingPrincipal: updatedSharedParams.remainingPrincipal,
       isEarlyRepayment: true,
     });
@@ -534,12 +719,37 @@ function applyEarlyRepayment(
     sharedParams.loanType === "ANNUITY" &&
     earlyRepayment.repaymentType === "DECREASE_PAYMENT"
   ) {
+    console.log(sharedParams);
     updatedSharedParams.annuityMonthlyPayment = calculateAnnuityMonthlyPayment({
       principal: updatedSharedParams.remainingPrincipal,
       monthlyInterestRate: sharedParams.monthlyInterestRate,
       termMonths: updatedSharedParams.termMonthsToCalculate,
       roundingDecimals: sharedParams.roundingDecimals,
     });
+  }
+
+  if (
+    sharedParams.loanType === "ANNUITY" &&
+    earlyRepayment.repaymentType === "DECREASE_TERM" &&
+    principalAmountPaid > 0
+  ) {
+    const monthsReduction = calculateMonthsReduction(
+      principalAmountPaid,
+      sharedParams.remainingPrincipal,
+      sharedParams.monthlyInterestRate,
+      sharedParams.annuityMonthlyPayment
+    );
+
+    if (monthsReduction > 0) {
+      updatedSharedParams.remainingTermMonths = Math.max(
+        0,
+        updatedSharedParams.remainingTermMonths - monthsReduction
+      );
+      updatedSharedParams.termMonthsToCalculate = Math.max(
+        0,
+        updatedSharedParams.termMonthsToCalculate - monthsReduction
+      );
+    }
   }
 
   if (sharedParams.loanType === "AMORTIZATION") {
@@ -577,7 +787,7 @@ function applyEarlyRepayment(
       );
       break;
   }
-  
+
   if (
     updatedEarlyRepayment &&
     updatedEarlyRepayment.earlyRepaymentDate < updatedSharedParams.nextDate
@@ -614,22 +824,25 @@ function applyEarlyRepayment(
 /**
  * Вычисляет номер месяца от даты выдачи кредита.
  */
-function calculateMonthFromIssueDate(paymentDate: Date, issueDate: Date): number {
+function calculateMonthFromIssueDate(
+  paymentDate: Date,
+  issueDate: Date
+): number {
   return differenceInMonths(paymentDate, issueDate) + 1;
 }
 
 /**
  * Вычисляет правильный номер месяца для платежа.
- * 
+ *
  * Для регулярных платежей:
  * - Если день платежа совпадает с paymentDayNumber, номер = разница месяцев от даты выдачи + 1
  * - Иначе используется текущий счетчик месяца
- * 
+ *
  * Для досрочных платежей:
  * - Если происходит в тот же день, что и регулярный платеж - используется номер регулярного платежа
  * - Иначе вычисляется номер месяца для даты досрочного платежа от даты выдачи
  */
-export function calculateMonthNumber(
+function calculateMonthNumber(
   paymentDate: Date,
   isEarlyRepayment: boolean,
   currentMonthNumber: number,
@@ -645,7 +858,13 @@ export function calculateMonthNumber(
 
     // Если досрочный платеж происходит в тот же день, что и регулярный платеж
     if (isSameDay(paymentDate, nextRegularDate)) {
-      return calculateMonthNumber(nextRegularDate, false, currentMonthNumber, issueDate, paymentDayNumber);
+      return calculateMonthNumber(
+        nextRegularDate,
+        false,
+        currentMonthNumber,
+        issueDate,
+        paymentDayNumber
+      );
     }
 
     // Вычисляем номер месяца для даты досрочного платежа
