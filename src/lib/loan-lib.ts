@@ -4,6 +4,7 @@ import {
   differenceInMonths,
   getDaysInMonth,
   isLeapYear,
+  isSameDay,
   isWeekend,
   nextMonday,
 } from "date-fns";
@@ -608,13 +609,6 @@ function applyEarlyRepayment(
     deleteEarlyRepayment,
     updatedEarlyRepayment,
   };
-}
-
-/**
- * Сравнивает две даты по дню (год, месяц, день), игнорируя время.
- */
-function isSameDay(date1: Date, date2: Date): boolean {
-  return date1.toISOString().split('T')[0] === date2.toISOString().split('T')[0];
 }
 
 /**
