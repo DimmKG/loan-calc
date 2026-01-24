@@ -65,10 +65,12 @@ export interface LoanScheduleEntry {
   isEarlyRepayment?: boolean;
 }
 
-export function generateLoanSchedule(params: LoanScheduleParams): {
+export interface LoanScheduleResult {
   schedule: LoanScheduleEntry[];
   startMonthlyPayment: number;
-} {
+}
+
+export function generateLoanSchedule(params: LoanScheduleParams): LoanScheduleResult {
   const schedule: LoanScheduleEntry[] = [];
 
   const {
