@@ -42,6 +42,7 @@ const earlyRepaymentSchema = z.object({
     .number()
     .positive("Сумма должна быть больше 0"),
   repaymentType: z.enum(["DECREASE_TERM", "DECREASE_PAYMENT"]),
+  syncWithPaymentDate: z.boolean().optional(),
 });
 
 export default function LoanInputCard({
@@ -64,6 +65,7 @@ export default function LoanInputCard({
         .min(0, "Ставка не может быть отрицательной"),
       loanType: z.enum(["ANNUITY", "AMORTIZATION"]),
       interestOnlyFirstPeriod: z.boolean().optional(),
+      interestOnlyPeriodExtendsTerm: z.boolean().optional(),
       moveHolidayToNextDay: z.boolean().optional(),
       dayCountBasis: z
         .enum(["ACTUAL_365", "ACTUAL_360", "ACTUAL_ACTUAL"])
@@ -101,6 +103,7 @@ export default function LoanInputCard({
     loanType: "ANNUITY",
     interestRate: 10,
     interestOnlyFirstPeriod: false,
+    interestOnlyPeriodExtendsTerm: false,
     dayCountBasis: "ACTUAL_365",
     roundingDecimals: 2,
     issueDate: new Date(),
@@ -139,6 +142,9 @@ export default function LoanInputCard({
           ? Number(parsed.paymentDayNumber)
           : 20,
         interestOnlyFirstPeriod: Boolean(parsed.interestOnlyFirstPeriod),
+        interestOnlyPeriodExtendsTerm: Boolean(
+          parsed.interestOnlyPeriodExtendsTerm
+        ),
         moveHolidayToNextDay: Boolean(parsed.moveHolidayToNextDay),
         earlyRepayments: (parsed.earlyRepayments || []).map((er: any) => ({
           id: er.id || `er-${Date.now()}-${Math.random()}`,
@@ -151,6 +157,7 @@ export default function LoanInputCard({
           periodicity: er.periodicity || "MONTHLY",
           earlyRepaymentAmount: er.earlyRepaymentAmount || 0,
           repaymentType: er.repaymentType || "DECREASE_PAYMENT",
+          syncWithPaymentDate: Boolean(er.syncWithPaymentDate),
         })),
       };
     } catch (error) {
@@ -184,6 +191,7 @@ export default function LoanInputCard({
               periodicity: er.periodicity,
               earlyRepaymentAmount: er.earlyRepaymentAmount,
               repaymentType: er.repaymentType,
+              syncWithPaymentDate: er.syncWithPaymentDate,
             })),
           })
         );
@@ -205,6 +213,7 @@ export default function LoanInputCard({
         periodicity: "MONTHLY" as const,
         repaymentType: "DECREASE_PAYMENT" as const,
         earlyRepaymentAmount: 0,
+        syncWithPaymentDate: false,
       },
     ]);
   }, [form]);
@@ -235,6 +244,7 @@ export default function LoanInputCard({
         periodicity: er.periodicity,
         earlyRepaymentAmount: er.earlyRepaymentAmount,
         repaymentType: er.repaymentType,
+        syncWithPaymentDate: er.syncWithPaymentDate,
       })),
     };
 
@@ -285,6 +295,9 @@ export default function LoanInputCard({
             ? Number(importedData.paymentDayNumber)
             : 20,
           interestOnlyFirstPeriod: Boolean(importedData.interestOnlyFirstPeriod),
+          interestOnlyPeriodExtendsTerm: Boolean(
+            importedData.interestOnlyPeriodExtendsTerm
+          ),
           moveHolidayToNextDay: Boolean(importedData.moveHolidayToNextDay),
           earlyRepayments: (importedData.earlyRepayments || []).map((er: any) => ({
             id: er.id || `er-${Date.now()}-${Math.random()}`,
@@ -297,6 +310,7 @@ export default function LoanInputCard({
             periodicity: er.periodicity || "MONTHLY",
             earlyRepaymentAmount: er.earlyRepaymentAmount || 0,
             repaymentType: er.repaymentType || "DECREASE_PAYMENT",
+            syncWithPaymentDate: Boolean(er.syncWithPaymentDate),
           })),
         };
 
@@ -670,6 +684,25 @@ export default function LoanInputCard({
                           )}
                         />
                       </div>
+
+                      <FormField
+                        control={form.control}
+                        name={`earlyRepayments.${index}.syncWithPaymentDate`}
+                        render={({ field }) => (
+                          <FormItem className="flex items-center gap-2">
+                            <FormControl>
+                              <Checkbox
+                                checked={field.value}
+                                onCheckedChange={field.onChange}
+                              />
+                            </FormControl>
+                            <FormLabel className="text-sm">
+                              Привязать к дню платежа (учитывать перенос
+                              выходных)
+                            </FormLabel>
+                          </FormItem>
+                        )}
+                      />
                     </div>
                   ))}
 
@@ -775,6 +808,25 @@ export default function LoanInputCard({
                       </FormItem>
                     )}
                   />
+                  {form.watch("interestOnlyFirstPeriod") && (
+                    <FormField
+                      control={form.control}
+                      name="interestOnlyPeriodExtendsTerm"
+                      render={({ field }) => (
+                        <FormItem className="flex items-center gap-2 ml-6">
+                          <FormControl>
+                            <Checkbox
+                              checked={field.value}
+                              onCheckedChange={field.onChange}
+                            />
+                          </FormControl>
+                          <FormLabel className="text-sm">
+                            Льготный месяц увеличивает срок кредита
+                          </FormLabel>
+                        </FormItem>
+                      )}
+                    />
+                  )}
                   <FormField
                     control={form.control}
                     name="moveHolidayToNextDay"

@@ -24,8 +24,8 @@ export interface ChartGroupedData {
 }
 
 const chartConfig = {
-  paymentAmount: {
-    label: "Общий платёж",
+  principalAmount: {
+    label: "Основной долг",
     color: "#10b981",
   },
   interestAmount: {
@@ -111,6 +111,12 @@ export default function PaymentsChartDialog({
                         year: "numeric",
                       });
                     }}
+                    valueFormatter={(value) =>
+                      value.toLocaleString("ru-RU", {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })
+                    }
                     indicator="dot"
                   />
                 }

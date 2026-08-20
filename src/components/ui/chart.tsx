@@ -111,6 +111,8 @@ const ChartTooltipContent = React.forwardRef<
       indicator?: "line" | "dot" | "dashed"
       nameKey?: string
       labelKey?: string
+      /** Formats a row's numeric value. Defaults to value.toLocaleString(). */
+      valueFormatter?: (value: number) => string
     }
 >(
   (
@@ -128,6 +130,7 @@ const ChartTooltipContent = React.forwardRef<
       color,
       nameKey,
       labelKey,
+      valueFormatter,
     },
     ref
   ) => {
@@ -228,7 +231,7 @@ const ChartTooltipContent = React.forwardRef<
                     )}
                     <div
                       className={cn(
-                        "flex flex-1 justify-between leading-none",
+                        "flex flex-1 justify-between items-baseline leading-none gap-4",
                         nestLabel ? "items-end" : "items-center"
                       )}
                     >
@@ -238,9 +241,11 @@ const ChartTooltipContent = React.forwardRef<
                           {itemConfig?.label || item.name}
                         </span>
                       </div>
-                      {item.value && (
-                        <span className="font-mono font-medium tabular-nums text-foreground">
-                          {item.value.toLocaleString()}
+                      {item.value !== undefined && item.value !== null && (
+                        <span className="shrink-0 text-right font-mono font-medium tabular-nums text-foreground">
+                          {valueFormatter
+                            ? valueFormatter(Number(item.value))
+                            : item.value.toLocaleString()}
                         </span>
                       )}
                     </div>
