@@ -162,6 +162,41 @@ function splitDateRangeByCalendarYear(
 }
 
 /**
+ * Начисленные простые проценты за фактическое число дней между датами, по
+ * выбранной базе расчёта (дней в году/месяце) - БЕЗ округления результата.
+ * Используется там, где промежуточное округление недопустимо (например,
+ * при подборе платежа по многим периодам подряд - округление ставки до
+ * копеек на каждом шаге разрушило бы точность). Публичная
+ * calculateAccruedInterest ниже - тонкая округляющая обёртка над этой же
+ * логикой.
+ */
+function accruedInterestRaw(
+  principal: number,
+  annualInterestRatePercent: number,
+  dayCountBasis: DayCountBasis,
+  fromDate: Date,
+  toDate: Date
+): number {
+  if (dayCountBasis === "ACTUAL_ACTUAL") {
+    const segments = splitDateRangeByCalendarYear(fromDate, toDate);
+    return segments.reduce((sum, segment) => {
+      const days = differenceInCalendarDays(segment.end, segment.start);
+      return (
+        sum +
+        principal *
+          (annualInterestRatePercent / 100 / segment.daysInYear) *
+          days
+      );
+    }, 0);
+  }
+
+  const dayDifference = differenceInCalendarDays(toDate, fromDate);
+  const { daysInYear } = getMonthDaysAndYearDays(toDate, dayCountBasis);
+
+  return principal * (annualInterestRatePercent / 100 / daysInYear) * dayDifference;
+}
+
+/**
  * Начисленные простые проценты за фактическое число дней между датами,
  * по выбранной базе расчёта (дней в году/месяце).
  */
@@ -182,27 +217,81 @@ export function calculateAccruedInterest(params: {
     roundingDecimals,
   } = params;
 
-  if (dayCountBasis === "ACTUAL_ACTUAL") {
-    const segments = splitDateRangeByCalendarYear(fromDate, toDate);
-    const totalInterest = segments.reduce((sum, segment) => {
-      const days = differenceInCalendarDays(segment.end, segment.start);
-      return (
-        sum +
-        principal *
-          (annualInterestRatePercent / 100 / segment.daysInYear) *
-          days
-      );
-    }, 0);
-    return roundDecimals(totalInterest, roundingDecimals);
-  }
-
-  const dayDifference = differenceInCalendarDays(toDate, fromDate);
-  const { daysInYear } = getMonthDaysAndYearDays(toDate, dayCountBasis);
-
   return roundDecimals(
-    principal * (annualInterestRatePercent / 100 / daysInYear) * dayDifference,
+    accruedInterestRaw(principal, annualInterestRatePercent, dayCountBasis, fromDate, toDate),
     roundingDecimals
   );
+}
+
+/**
+ * Считает фиксированный аннуитетный платёж методом goal-seek: моделирует
+ * реальную последовательность будущих дат платежей (с тем же переносом
+ * выходных, что и основной цикл графика) и реальные проценты по каждому
+ * периоду (факт дней, без промежуточного округления), затем подбирает
+ * платёж, при котором остаток долга обнуляется ровно после termMonths
+ * периодов. В отличие от closed-form calculateAnnuityMonthlyPayment
+ * (номинальная ставка rate/12 на все периоды одинаково), здесь у каждого
+ * периода своя реальная ставка - что и обеспечивает точное совпадение с
+ * тем, как считают реальные банки (см. обоснование в плане/контексте сессии).
+ */
+export function calculateAnnuityPaymentForSchedule(params: {
+  principal: number;
+  annualInterestRatePercent: number;
+  dayCountBasis: DayCountBasis;
+  startDate: Date;
+  paymentDayNumber: number;
+  moveHolidayToNextDay: boolean;
+  termMonths: number;
+  roundingDecimals: number;
+  /**
+   * Сколько ближайших периодов моделировать точно (реальные даты, реальные
+   * дни, перенос выходных). Периоды после этого горизонта используют
+   * номинальную месячную ставку (rate/12) как приближение. По умолчанию
+   * (undefined) - точное моделирование всего срока целиком.
+   */
+  horizonMonths?: number;
+}): number {
+  const {
+    principal,
+    annualInterestRatePercent,
+    dayCountBasis,
+    startDate,
+    paymentDayNumber,
+    moveHolidayToNextDay,
+    termMonths,
+    roundingDecimals,
+    horizonMonths,
+  } = params;
+
+  const preciseCount = Math.min(termMonths, horizonMonths ?? termMonths);
+  const flatMonthlyRate = annualInterestRatePercent / 12 / 100;
+
+  let periodStart = startDate;
+  const rates: number[] = [];
+  for (let i = 0; i < termMonths; i++) {
+    if (i < preciseCount) {
+      const periodEnd = moveToNextDate(periodStart, paymentDayNumber, moveHolidayToNextDay);
+      rates.push(
+        accruedInterestRaw(1, annualInterestRatePercent, dayCountBasis, periodStart, periodEnd)
+      );
+      periodStart = periodEnd;
+    } else {
+      rates.push(flatMonthlyRate);
+    }
+  }
+
+  // Замкнутая форма для аннуитета с переменной по периодам ставкой:
+  // payment = P * Π(1+r_k) / Σ_{k=1}^{N} Π_{j=k+1}^{N}(1+r_j)
+  const suffix: number[] = new Array(termMonths + 1);
+  suffix[termMonths] = 1;
+  for (let k = termMonths - 1; k >= 0; k--) {
+    suffix[k] = suffix[k + 1] * (1 + rates[k]);
+  }
+  let denom = 0;
+  for (let k = 0; k < termMonths; k++) {
+    denom += suffix[k + 1];
+  }
+  return roundDecimals((principal * suffix[0]) / denom, roundingDecimals);
 }
 
 /**

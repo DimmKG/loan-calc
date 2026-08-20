@@ -6,6 +6,7 @@ import {
   calculateAccruedInterest,
   calculateAmortizationMonthsReduction,
   calculateAnnuityMonthlyPayment,
+  calculateAnnuityPaymentForSchedule,
   calculateMonthFromIssueDate,
   calculateMonthNumber,
   calculateMonthsReduction,
@@ -31,14 +32,14 @@ describe("roundDecimals", () => {
 
 describe("calculateAnnuityMonthlyPayment", () => {
   it("matches the standard annuity formula", () => {
-    // P=1,000,000, i=1%/month (12%/year), n=12
+    // P=1 000 000, i=1%/месяц (12%/год), n=12
     const payment = calculateAnnuityMonthlyPayment({
       principal: 1_000_000,
       monthlyInterestRate: 0.01,
       termMonths: 12,
       roundingDecimals: 2,
     });
-    // A = P*i*(1+i)^n / ((1+i)^n - 1)
+    // A = P*i*(1+i)^n / ((1+i)^n - 1) - стандартная формула аннуитета
     const i = 0.01;
     const n = 12;
     const expected = (1_000_000 * i * Math.pow(1 + i, n)) / (Math.pow(1 + i, n) - 1);
@@ -66,7 +67,7 @@ describe("getMonthDaysAndYearDays", () => {
   });
 
   it("defaults to 360/30 for any other basis", () => {
-    // @ts-expect-error - exercising the fallback branch
+    // @ts-expect-error - проверяем ветку по умолчанию (fallback)
     const result = getMonthDaysAndYearDays(new Date(2024, 1, 15), "UNKNOWN");
     expect(result.daysInYear).toBe(360);
     expect(result.daysInMonth).toBe(30);
@@ -83,7 +84,7 @@ describe("calculateAccruedInterest", () => {
       toDate: new Date(2024, 0, 31),
       roundingDecimals: 2,
     });
-    // 1,000,000 * (12/100/365) * 30
+    // 1 000 000 * (12/100/365) * 30
     expect(interest).toBeCloseTo(9863.01, 2);
   });
 
@@ -96,7 +97,7 @@ describe("calculateAccruedInterest", () => {
       toDate: new Date(2024, 0, 31),
       roundingDecimals: 2,
     });
-    // 1,000,000 * (12/100/360) * 30
+    // 1 000 000 * (12/100/360) * 30
     expect(interest).toBeCloseTo(10000, 2);
   });
 
@@ -109,7 +110,7 @@ describe("calculateAccruedInterest", () => {
       toDate: new Date(2024, 1, 29),
       roundingDecimals: 2,
     });
-    // 1,000,000 * (12/100/366) * 28
+    // 1 000 000 * (12/100/366) * 28
     expect(interest).toBeCloseTo(9180.33, 2);
   });
 
@@ -140,7 +141,7 @@ describe("calculateMonthsReduction (annuity term-reduction math)", () => {
   });
 
   it("returns a positive month reduction for a normal partial prepayment", () => {
-    // 24-month, 1M principal, 12%/year annuity, prepay 100,000 at month 6
+    // Кредит на 24 месяца, тело долга 1 млн, аннуитет 12%/год, досрочка 100 000 на 6-й месяц
     const payment = calculateAnnuityMonthlyPayment({
       principal: 1_000_000,
       monthlyInterestRate: 0.01,
@@ -189,8 +190,8 @@ describe("calculateAmortizationMonthsReduction", () => {
   });
 
   it("reduces the period count proportionally", () => {
-    // remaining 100,000 at 5,000/period => 20 periods before.
-    // pay off 40,000 => 60,000 remaining => 12 periods after => reduction 8
+    // остаток 100 000 при 5 000/период => 20 периодов до.
+    // погашаем 40 000 => остаток 60 000 => 12 периодов после => сокращение 8
     const reduction = calculateAmortizationMonthsReduction({
       principalAmountPaid: 40_000,
       remainingPrincipal: 100_000,
@@ -218,7 +219,7 @@ describe("moveToNextDate", () => {
   });
 
   it("moves a weekend payment date to the following Monday when enabled", () => {
-    // 2024-03-16 is a Saturday
+    // 2024-03-16 - суббота
     const next = moveToNextDate(new Date(2024, 1, 16), 16, true);
     expect(next.getDay()).not.toBe(0);
     expect(next.getDay()).not.toBe(6);
@@ -234,7 +235,7 @@ describe("moveToNextDate", () => {
 
 describe("alignToPaymentDate", () => {
   it("forces the day-of-month to paymentDayNumber, no weekend shift needed", () => {
-    // 2024-02-16 is a Friday
+    // 2024-02-16 - пятница
     const aligned = alignToPaymentDate(new Date(2024, 1, 1), 16, true);
     expect(aligned.getFullYear()).toBe(2024);
     expect(aligned.getMonth()).toBe(1);
@@ -242,7 +243,7 @@ describe("alignToPaymentDate", () => {
   });
 
   it("shifts to the following Monday when the aligned date lands on a weekend", () => {
-    // 2024-03-16 is a Saturday
+    // 2024-03-16 - суббота
     const aligned = alignToPaymentDate(new Date(2024, 2, 1), 16, true);
     expect(aligned.getDay()).not.toBe(0);
     expect(aligned.getDay()).not.toBe(6);
@@ -264,7 +265,7 @@ describe("advanceSyncedEarlyRepaymentDate", () => {
     const viaMoveToNextDate = moveToNextDate(start, 16, true);
     expect(viaAdvance.getTime()).toBe(viaMoveToNextDate.getTime());
 
-    // 2024-03-16 is a Saturday -> shifted to 2024-03-18
+    // 2024-03-16 - суббота -> сдвигается на 2024-03-18
     expect(viaAdvance.getMonth()).toBe(2);
     expect(viaAdvance.getDate()).toBe(18);
   });
@@ -416,5 +417,123 @@ describe("recalculateAnnuityPaymentAfterPrepayment / recalculateAmortizationPrin
       roundingDecimals: 2,
     });
     expect(principal).toBe(90_000);
+  });
+});
+
+describe("calculateAnnuityPaymentForSchedule", () => {
+  it("fully amortizes a synthetic 25-year loan to (near) zero via forward simulation", () => {
+    const principal = 3_000_000;
+    const annualInterestRatePercent = 9;
+    const startDate = new Date(2021, 3, 10); // 2021-04-10
+    const paymentDayNumber = 10;
+    const termMonths = 300;
+
+    const payment = calculateAnnuityPaymentForSchedule({
+      principal,
+      annualInterestRatePercent,
+      dayCountBasis: "ACTUAL_365",
+      startDate,
+      paymentDayNumber,
+      moveHolidayToNextDay: true,
+      termMonths,
+      roundingDecimals: 2,
+    });
+
+    // Прямая симуляция по той же логике реальных дат/подсчёта дней, по
+    // которой подбирался платёж, чтобы подтвердить, что он действительно
+    // обнуляет баланс (независимая проверка, а не подобранное вручную
+    // магическое число).
+    let balance = principal;
+    let periodStart = startDate;
+    for (let i = 0; i < termMonths; i++) {
+      const periodEnd = moveToNextDate(periodStart, paymentDayNumber, true);
+      const interest = calculateAccruedInterest({
+        principal: balance,
+        annualInterestRatePercent,
+        dayCountBasis: "ACTUAL_365",
+        fromDate: periodStart,
+        toDate: periodEnd,
+        roundingDecimals: 10,
+      });
+      balance = balance + interest - payment;
+      periodStart = periodEnd;
+    }
+    // Сам платёж округляется до ближайшей копейки перед тем, как применяться
+    // 300 раз, поэтому несколько рублей остаточного дрейфа округления за весь
+    // срок - ожидаемо и нормально (совпадает по порядку величины с тем, что
+    // наблюдается на реальных банковских данных) - ключевое свойство в том,
+    // что дрейф остаётся малым относительно платежа, а не в том, что он равен ровно 0.
+    expect(Math.abs(balance)).toBeLessThan(10);
+  });
+
+  it("diverges more from the flat closed-form payment on a long term than a short one", () => {
+    const shortGoalSeek = calculateAnnuityPaymentForSchedule({
+      principal: 1_000_000,
+      annualInterestRatePercent: 10,
+      dayCountBasis: "ACTUAL_365",
+      startDate: new Date(2023, 0, 5),
+      paymentDayNumber: 5,
+      moveHolidayToNextDay: false,
+      termMonths: 6,
+      roundingDecimals: 2,
+    });
+    const shortClosedForm = calculateAnnuityMonthlyPayment({
+      principal: 1_000_000,
+      monthlyInterestRate: 10 / 12 / 100,
+      termMonths: 6,
+      roundingDecimals: 2,
+    });
+
+    const longGoalSeek = calculateAnnuityPaymentForSchedule({
+      principal: 1_000_000,
+      annualInterestRatePercent: 10,
+      dayCountBasis: "ACTUAL_365",
+      startDate: new Date(2023, 0, 5),
+      paymentDayNumber: 5,
+      moveHolidayToNextDay: false,
+      termMonths: 240,
+      roundingDecimals: 2,
+    });
+    const longClosedForm = calculateAnnuityMonthlyPayment({
+      principal: 1_000_000,
+      monthlyInterestRate: 10 / 12 / 100,
+      termMonths: 240,
+      roundingDecimals: 2,
+    });
+
+    // Сравниваем ОТНОСИТЕЛЬНЫЙ дрейф (долю от суммы платежа), а не абсолютные
+    // рубли - у короткого кредита всё равно крупные абсолютные платежи (то же
+    // тело долга гасится за меньшее число периодов), поэтому одни только
+    // разницы в рублях не выделяют изолированно эффект дрейфа от подсчёта дней,
+    // который здесь тестируется.
+    const shortRelativeDiff =
+      Math.abs(shortGoalSeek - shortClosedForm) / shortClosedForm;
+    const longRelativeDiff =
+      Math.abs(longGoalSeek - longClosedForm) / longClosedForm;
+    expect(longRelativeDiff).toBeGreaterThan(shortRelativeDiff);
+  });
+
+  it("horizonMonths: 0 falls back to the flat nominal rate for every period, matching the closed form", () => {
+    const params = {
+      principal: 2_000_000,
+      annualInterestRatePercent: 8,
+      dayCountBasis: "ACTUAL_365" as const,
+      startDate: new Date(2022, 5, 15),
+      paymentDayNumber: 15,
+      moveHolidayToNextDay: false,
+      termMonths: 180,
+      roundingDecimals: 2,
+    };
+    const full = calculateAnnuityPaymentForSchedule(params);
+    const flatTail = calculateAnnuityPaymentForSchedule({ ...params, horizonMonths: 0 });
+    const closedForm = calculateAnnuityMonthlyPayment({
+      principal: params.principal,
+      monthlyInterestRate: params.annualInterestRatePercent / 12 / 100,
+      termMonths: params.termMonths,
+      roundingDecimals: 2,
+    });
+
+    expect(flatTail).toBeCloseTo(closedForm, 2);
+    expect(full).not.toBe(flatTail);
   });
 });

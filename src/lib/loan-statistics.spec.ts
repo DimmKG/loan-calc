@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { generateLoanSchedule } from "./loan-lib";
-import { calculateAnnuityMonthlyPayment } from "./loan-schedule-helpers";
+import { calculateAnnuityPaymentForSchedule } from "./loan-schedule-helpers";
 import {
   calculateFullCostOfCredit,
   calculateLoanSummary,
@@ -15,8 +15,8 @@ describe("calculateXirrPercent", () => {
       { date: new Date(2024, 0, 1), amount: -100_000 },
       { date: new Date(2025, 0, 1), amount: 112_000 },
     ]);
-    // 2024 is a leap year, so Jan1-2024 -> Jan1-2025 is 366 days, not 365;
-    // solve the expected value the same way instead of hardcoding 12.
+    // 2024 - високосный год, поэтому 1 янв 2024 -> 1 янв 2025 это 366 дней, а не 365;
+    // вычисляем ожидаемое значение тем же способом, а не зашиваем 12 напрямую.
     const days = (new Date(2025, 0, 1).getTime() - new Date(2024, 0, 1).getTime()) / 86_400_000;
     const expected = (Math.pow(112_000 / 100_000, 365 / days) - 1) * 100;
     expect(rate).not.toBeNull();
@@ -37,20 +37,20 @@ describe("calculateXirrPercent", () => {
   });
 
   it("matches a hand-verified multi-period case (evenly spaced, no leap-year noise)", () => {
-    // 4 equal quarters of 91 days each (364 days total), principal 100,
-    // one payment per quarter designed to be root-findable.
+    // 4 равных квартала по 91 дню каждый (364 дня всего), основной долг 100,
+    // по одному платежу за квартал, подобранные так, чтобы корень уравнения находился.
     const cashFlows = [
       { date: new Date(2023, 0, 1), amount: -100_000 },
-      { date: new Date(2023, 3, 2), amount: 30_000 }, // +91 days
-      { date: new Date(2023, 6, 1), amount: 30_000 }, // +182 days
-      { date: new Date(2023, 8, 30), amount: 30_000 }, // +273 days
-      { date: new Date(2023, 11, 29), amount: 40_000 }, // +364 days
+      { date: new Date(2023, 3, 2), amount: 30_000 }, // +91 день
+      { date: new Date(2023, 6, 1), amount: 30_000 }, // +182 дня
+      { date: new Date(2023, 8, 30), amount: 30_000 }, // +273 дня
+      { date: new Date(2023, 11, 29), amount: 40_000 }, // +364 дня
     ];
     const rate = calculateXirrPercent(cashFlows);
     expect(rate).not.toBeNull();
 
-    // Verify by plugging the found rate back into the NPV equation directly
-    // (independent check, not just re-calling the function under test).
+    // Проверяем, подставляя найденную ставку обратно в уравнение NPV напрямую
+    // (независимая проверка, а не просто повторный вызов тестируемой функции).
     const r = rate! / 100;
     const base = cashFlows[0].date.getTime();
     const npv = cashFlows.reduce((sum, cf) => {
@@ -77,9 +77,10 @@ describe("calculateFullCostOfCredit", () => {
     const psk = calculateFullCostOfCredit({ schedule, principal, issueDate });
     expect(psk).not.toBeNull();
 
-    // No fees, monthly compounding at nominal 12%/year => effective annual
-    // rate = (1+0.01)^12 - 1 ≈ 12.68%. Real calendar month lengths vary, so
-    // allow a modest tolerance rather than exact equality.
+    // Без комиссий, ежемесячная капитализация при номинальных 12%/год =>
+    // эффективная годовая ставка = (1+0.01)^12 - 1 ≈ 12.68%. Реальная длина
+    // календарных месяцев меняется, поэтому допускаем небольшую погрешность
+    // вместо точного равенства.
     const effectiveAnnual = (Math.pow(1.01, 12) - 1) * 100;
     expect(psk!).toBeGreaterThan(annualRate);
     expect(psk!).toBeCloseTo(effectiveAnnual, 0);
@@ -92,7 +93,7 @@ describe("calculateFullCostOfCredit", () => {
   });
 
   it("rises when the same schedule is paid off with a smaller principal (implicit fee-like gap)", () => {
-    // Same payments, less money actually disbursed -> effective rate must be higher.
+    // Те же платежи, но фактически выдано меньше денег -> эффективная ставка должна быть выше.
     const issueDate = new Date(2024, 0, 15);
     const { schedule } = generateLoanSchedule({
       principal: 1_000_000,
@@ -141,10 +142,17 @@ describe("calculateLoanSummary", () => {
       2
     );
     expect(summary.termMonths).toBe(24);
+    // Платёж пересчитывается методом goal-seek (по умолчанию
+    // fullInterestModeling: true) по реальным датам периодов, а не по
+    // плоской формульной ставке.
     expect(summary.monthlyPayment).toBe(
-      calculateAnnuityMonthlyPayment({
+      calculateAnnuityPaymentForSchedule({
         principal,
-        monthlyInterestRate: 0.01,
+        annualInterestRatePercent: 12,
+        dayCountBasis: "ACTUAL_365",
+        startDate: issueDate,
+        paymentDayNumber: 15,
+        moveHolidayToNextDay: false,
         termMonths: 24,
         roundingDecimals: 2,
       })
@@ -214,8 +222,9 @@ describe("groupScheduleByMonth", () => {
       issueDate: new Date(2024, 0, 15),
       earlyRepayments: [
         {
-          // Lands in the same calendar month as the January regular payment's
-          // following month isn't guaranteed; pick a date safely inside period 1.
+          // Попадание в тот же календарный месяц, что и месяц, следующий за
+          // январским обычным платежом, не гарантировано; выбираем дату
+          // заведомо внутри периода 1.
           earlyRepaymentDateStart: new Date(2024, 1, 20),
           earlyRepaymentAmount: 20_000,
           periodicity: "ONCE",
@@ -227,7 +236,7 @@ describe("groupScheduleByMonth", () => {
     const grouped = groupScheduleByMonth(schedule);
     expect(grouped.length).toBeGreaterThan(0);
 
-    // Find the month with 2 entries (regular payment + early repayment).
+    // Находим месяц с 2 записями (обычный платёж + досрочное погашение).
     const rawGroups = new Map<string, typeof schedule>();
     for (const entry of schedule) {
       const key = `${entry.paymentDate.getFullYear()}-${entry.paymentDate.getMonth()}`;
@@ -244,7 +253,7 @@ describe("groupScheduleByMonth", () => {
     const expectedRemaining = multiEntries[multiEntries.length - 1].remainingPrincipal;
     const naiveSum = multiEntries.reduce((s, e) => s + e.remainingPrincipal, 0);
     expect(groupedMonth.remainingPrincipal).toBeCloseTo(expectedRemaining, 2);
-    // Guard against the original bug (summing balances) regressing back in.
+    // Защита от возврата исходной ошибки (суммирования остатков).
     expect(groupedMonth.remainingPrincipal).not.toBeCloseTo(naiveSum, 2);
   });
 });

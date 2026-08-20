@@ -25,7 +25,12 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { ChevronsUpDown, Plus, Trash2, Download, Upload } from "lucide-react";
+import { ChevronsUpDown, Plus, Trash2, Download, Upload, Info } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useCallback, useEffect, useState } from "react";
 import { FormMessage } from "@/components/ui/form";
 import { z } from "zod";
@@ -101,6 +106,14 @@ export default function LoanInputCard({
       interestOnlyFirstPeriod: z.boolean().optional(),
       interestOnlyPeriodExtendsTerm: z.boolean().optional(),
       moveHolidayToNextDay: z.boolean().optional(),
+      fullInterestModeling: z.boolean().optional(),
+      interestModelingHorizonMonths: z.union([
+        z.coerce
+          .number()
+          .int("Должно быть целым числом")
+          .positive("Должно быть больше 0"),
+        z.undefined(),
+      ]),
       dayCountBasis: z
         .enum(["ACTUAL_365", "ACTUAL_360", "ACTUAL_ACTUAL"])
         .optional(),
@@ -138,15 +151,17 @@ export default function LoanInputCard({
     interestRate: 10,
     interestOnlyFirstPeriod: false,
     interestOnlyPeriodExtendsTerm: false,
-    dayCountBasis: "ACTUAL_365",
+    dayCountBasis: "ACTUAL_ACTUAL",
     roundingDecimals: 2,
     issueDate: new Date(),
     paymentDayNumber: 20,
     moveHolidayToNextDay: false,
+    fullInterestModeling: true,
+    interestModelingHorizonMonths: undefined,
     earlyRepayments: [],
   };
 
-  // Get initial values from localStorage or use defaults
+  // Берём начальные значения из localStorage или используем значения по умолчанию
   const getInitialValues = (): LoanInputForm => {
     try {
       const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
@@ -166,7 +181,7 @@ export default function LoanInputCard({
           parsed.dayCountBasis
         )
           ? parsed.dayCountBasis
-          : "ACTUAL_365",
+          : "ACTUAL_ACTUAL",
         roundingDecimals:
           parsed.roundingDecimals === "" || parsed.roundingDecimals == null
             ? 2
@@ -180,6 +195,12 @@ export default function LoanInputCard({
           parsed.interestOnlyPeriodExtendsTerm
         ),
         moveHolidayToNextDay: Boolean(parsed.moveHolidayToNextDay),
+        // Отсутствие поля (старые сохранённые настройки до появления этой
+        // фичи) трактуется как "не выключено явно" -> точное моделирование.
+        fullInterestModeling: parsed.fullInterestModeling !== false,
+        interestModelingHorizonMonths: parsed.interestModelingHorizonMonths
+          ? Number(parsed.interestModelingHorizonMonths)
+          : undefined,
         earlyRepayments: (parsed.earlyRepayments || []).map((er: any) => ({
           id: er.id || `er-${Date.now()}-${Math.random()}`,
           earlyRepaymentDateStart: er.earlyRepaymentDateStart
@@ -213,7 +234,7 @@ export default function LoanInputCard({
     Set<string>
   >(new Set());
 
-  // Persist settings to localStorage on any change
+  // Сохраняем настройки в localStorage при любом изменении
   useEffect(() => {
     const subscription = form.watch((value) => {
       try {
@@ -342,7 +363,7 @@ export default function LoanInputCard({
             importedData.dayCountBasis
           )
             ? importedData.dayCountBasis
-            : "ACTUAL_365",
+            : "ACTUAL_ACTUAL",
           roundingDecimals:
             importedData.roundingDecimals === "" ||
             importedData.roundingDecimals == null
@@ -359,6 +380,10 @@ export default function LoanInputCard({
             importedData.interestOnlyPeriodExtendsTerm
           ),
           moveHolidayToNextDay: Boolean(importedData.moveHolidayToNextDay),
+          fullInterestModeling: importedData.fullInterestModeling !== false,
+          interestModelingHorizonMonths: importedData.interestModelingHorizonMonths
+            ? Number(importedData.interestModelingHorizonMonths)
+            : undefined,
           earlyRepayments: (importedData.earlyRepayments || []).map((er: any) => ({
             id: er.id || `er-${Date.now()}-${Math.random()}`,
             earlyRepaymentDateStart: er.earlyRepaymentDateStart
@@ -935,6 +960,65 @@ export default function LoanInputCard({
                       </FormItem>
                     )}
                   />
+                  <FormField
+                    control={form.control}
+                    name="fullInterestModeling"
+                    render={({ field }) => (
+                      <FormItem className="flex items-center gap-2">
+                        <FormControl>
+                          <Checkbox
+                            checked={field.value}
+                            onCheckedChange={field.onChange}
+                          />
+                        </FormControl>
+                        <FormLabel className="text-sm flex items-center gap-1">
+                          Полное моделирование процента
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
+                            </TooltipTrigger>
+                            <TooltipContent className="max-w-xs">
+                              Банки при расчёте платежа моделируют каждый
+                              день с учётом переноса дат на будни — это
+                              влияет на проценты и итоговую сумму платежа.
+                              Отключение возвращает к упрощённой формуле
+                              (ставка/12), которая может давать небольшое
+                              расхождение с реальным банковским графиком на
+                              длинных сроках.
+                            </TooltipContent>
+                          </Tooltip>
+                        </FormLabel>
+                      </FormItem>
+                    )}
+                  />
+                  {form.watch("fullInterestModeling") && (
+                    <FormField
+                      control={form.control}
+                      name="interestModelingHorizonMonths"
+                      render={({ field }) => (
+                        <FormItem className="ml-6 max-w-[260px]">
+                          <FormLabel className="text-xs text-muted-foreground">
+                            Количество платежей для моделирования
+                          </FormLabel>
+                          <FormControl>
+                            <Input
+                              type="number"
+                              placeholder="весь срок"
+                              value={field.value ?? ""}
+                              onChange={(e) => {
+                                const value = e.target.value;
+                                field.onChange(
+                                  value === "" ? undefined : Number(value)
+                                );
+                              }}
+                              className="h-9"
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  )}
                 </div>
               </CollapsibleContent>
             </Collapsible>
