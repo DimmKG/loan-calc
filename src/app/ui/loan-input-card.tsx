@@ -45,6 +45,40 @@ const earlyRepaymentSchema = z.object({
   syncWithPaymentDate: z.boolean().optional(),
 });
 
+const PERIODICITY_LABELS: Record<string, string> = {
+  ONCE: "один раз",
+  MONTHLY: "ежемесячно",
+  QUARTERLY: "ежеквартально",
+  YEARLY: "ежегодно",
+};
+
+const REPAYMENT_TYPE_LABELS: Record<string, string> = {
+  DECREASE_PAYMENT: "уменьшение платежа",
+  DECREASE_TERM: "уменьшение срока",
+};
+
+function formatEarlyRepaymentSummary(er: {
+  earlyRepaymentAmount?: number;
+  periodicity?: string;
+  repaymentType?: string;
+  earlyRepaymentDateStart: Date;
+}): string {
+  const amount =
+    er.earlyRepaymentAmount != null
+      ? `${er.earlyRepaymentAmount.toLocaleString("ru-RU")} ₽`
+      : "—";
+  const periodicity = er.periodicity ? PERIODICITY_LABELS[er.periodicity] : "";
+  const repaymentType = er.repaymentType
+    ? REPAYMENT_TYPE_LABELS[er.repaymentType]
+    : "";
+  const date = er.earlyRepaymentDateStart
+    ? format(er.earlyRepaymentDateStart, "dd.MM.yyyy")
+    : "";
+  return [amount, periodicity, repaymentType, date && `с ${date}`]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 export default function LoanInputCard({
   onFormSubmit,
 }: {
@@ -171,6 +205,14 @@ export default function LoanInputCard({
     defaultValues: getInitialValues(),
   });
 
+  // Локальное UI-состояние "какие карточки досрочного погашения раскрыты".
+  // Не часть формы: не сохраняется в localStorage и не участвует в
+  // экспорте/импорте. Карточки, загруженные при монтировании, свёрнуты по
+  // умолчанию; свежедобавленная карточка сразу открывается.
+  const [openEarlyRepaymentIds, setOpenEarlyRepaymentIds] = useState<
+    Set<string>
+  >(new Set());
+
   // Persist settings to localStorage on any change
   useEffect(() => {
     const subscription = form.watch((value) => {
@@ -216,6 +258,7 @@ export default function LoanInputCard({
         syncWithPaymentDate: false,
       },
     ]);
+    setOpenEarlyRepaymentIds((prev) => new Set(prev).add(newId));
   }, [form]);
 
   const removeEarlyRepayment = useCallback((id: string) => {
@@ -224,7 +267,24 @@ export default function LoanInputCard({
       "earlyRepayments",
       currentEarlyRepayments.filter((er) => er.id !== id)
     );
+    setOpenEarlyRepaymentIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
   }, [form]);
+
+  const toggleEarlyRepaymentOpen = useCallback((id: string, open: boolean) => {
+    setOpenEarlyRepaymentIds((prev) => {
+      const next = new Set(prev);
+      if (open) {
+        next.add(id);
+      } else {
+        next.delete(id);
+      }
+      return next;
+    });
+  }, []);
 
   function onSubmit(data: LoanInputForm) {
     onFormSubmit?.(data);
@@ -515,7 +575,14 @@ export default function LoanInputCard({
             {/* Досрочные погашения */}
             <Collapsible className="mb-6" defaultOpen>
               <div className="flex justify-between items-center gap-2 mb-3">
-                <h4 className="text-sm font-semibold">Досрочные погашения</h4>
+                <h4 className="text-sm font-semibold">
+                  Досрочные погашения
+                  {(form.watch("earlyRepayments")?.length ?? 0) > 0 && (
+                    <span className="ml-2 text-xs font-normal text-muted-foreground">
+                      ({form.watch("earlyRepayments")?.length})
+                    </span>
+                  )}
+                </h4>
                 <CollapsibleTrigger asChild>
                   <Button variant="ghost" size="icon" className="size-8">
                     <ChevronsUpDown />
@@ -525,26 +592,48 @@ export default function LoanInputCard({
               </div>
               <CollapsibleContent>
                 <div className="space-y-4">
-                  {form.watch("earlyRepayments")?.map((er, index) => (
-                    <div
+                  {form.watch("earlyRepayments")?.map((er, index) => {
+                    const isOpen = openEarlyRepaymentIds.has(er.id);
+                    return (
+                    <Collapsible
                       key={er.id}
+                      open={isOpen}
+                      onOpenChange={(open) =>
+                        toggleEarlyRepaymentOpen(er.id, open)
+                      }
                       className="p-4 border rounded-lg space-y-4"
                     >
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm font-medium">
-                          Досрочное погашение
-                        </span>
+                      <div className="flex justify-between items-center gap-2">
+                        <CollapsibleTrigger asChild>
+                          <button
+                            type="button"
+                            className="flex-1 flex items-center justify-between gap-2 text-left"
+                          >
+                            <div>
+                              <span className="text-sm font-medium block">
+                                Досрочное погашение
+                              </span>
+                              {!isOpen && (
+                                <span className="text-xs text-muted-foreground">
+                                  {formatEarlyRepaymentSummary(er)}
+                                </span>
+                              )}
+                            </div>
+                            <ChevronsUpDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+                          </button>
+                        </CollapsibleTrigger>
                         <Button
                           type="button"
                           variant="ghost"
                           size="icon"
-                          className="size-6"
+                          className="size-6 shrink-0"
                           onClick={() => removeEarlyRepayment(er.id)}
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>
                       </div>
 
+                      <CollapsibleContent className="space-y-4">
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <FormField
                           control={form.control}
@@ -703,8 +792,10 @@ export default function LoanInputCard({
                           </FormItem>
                         )}
                       />
-                    </div>
-                  ))}
+                      </CollapsibleContent>
+                    </Collapsible>
+                    );
+                  })}
 
                   <Button
                     type="button"

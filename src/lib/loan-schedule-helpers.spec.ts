@@ -112,6 +112,21 @@ describe("calculateAccruedInterest", () => {
     // 1,000,000 * (12/100/366) * 28
     expect(interest).toBeCloseTo(9180.33, 2);
   });
+
+  it("splits ACTUAL_ACTUAL interest across a Dec-31/Jan-1 boundary between a leap year and a non-leap year", () => {
+    // 2028 - високосный (366 дней), 2029 - обычный (365 дней).
+    const interest = calculateAccruedInterest({
+      principal: 1_000_000,
+      annualInterestRatePercent: 12,
+      dayCountBasis: "ACTUAL_ACTUAL",
+      fromDate: new Date(2028, 11, 20), // 2028-12-20
+      toDate: new Date(2029, 0, 20), // 2029-01-20
+      roundingDecimals: 2,
+    });
+    // 12 дней в 2028 (20-31 дек) / 366 + 19 дней в 2029 (1-19 янв) / 365
+    // = 3934.4262... + 6246.5753... = 10181.00
+    expect(interest).toBeCloseTo(10181.0, 2);
+  });
 });
 
 describe("calculateMonthsReduction (annuity term-reduction math)", () => {

@@ -1,5 +1,6 @@
 import {
   addMonths,
+  addYears,
   differenceInCalendarDays,
   differenceInMonths,
   getDaysInMonth,
@@ -7,6 +8,7 @@ import {
   isSameDay,
   isWeekend,
   nextMonday,
+  startOfYear,
 } from "date-fns";
 
 export type LoanType = "ANNUITY" | "AMORTIZATION";
@@ -135,6 +137,31 @@ export function calculateAmortizationMonthsReduction(params: {
 }
 
 /**
+ * Разбивает полуоткрытый интервал [fromDate, toDate) на сегменты по
+ * календарным годам: для ACTUAL_ACTUAL дни до и после границы 31
+ * декабря/1 января относятся к разным годам и должны делиться на
+ * дни-в-году (365/366) СВОЕГО года, а не одного числа на весь период.
+ */
+function splitDateRangeByCalendarYear(
+  fromDate: Date,
+  toDate: Date
+): { start: Date; end: Date; daysInYear: number }[] {
+  const segments: { start: Date; end: Date; daysInYear: number }[] = [];
+  let segmentStart = fromDate;
+  while (segmentStart < toDate) {
+    const nextYearStart = startOfYear(addYears(segmentStart, 1));
+    const segmentEnd = nextYearStart < toDate ? nextYearStart : toDate;
+    segments.push({
+      start: segmentStart,
+      end: segmentEnd,
+      daysInYear: isLeapYear(segmentStart) ? 366 : 365,
+    });
+    segmentStart = segmentEnd;
+  }
+  return segments;
+}
+
+/**
  * Начисленные простые проценты за фактическое число дней между датами,
  * по выбранной базе расчёта (дней в году/месяце).
  */
@@ -154,6 +181,20 @@ export function calculateAccruedInterest(params: {
     toDate,
     roundingDecimals,
   } = params;
+
+  if (dayCountBasis === "ACTUAL_ACTUAL") {
+    const segments = splitDateRangeByCalendarYear(fromDate, toDate);
+    const totalInterest = segments.reduce((sum, segment) => {
+      const days = differenceInCalendarDays(segment.end, segment.start);
+      return (
+        sum +
+        principal *
+          (annualInterestRatePercent / 100 / segment.daysInYear) *
+          days
+      );
+    }, 0);
+    return roundDecimals(totalInterest, roundingDecimals);
+  }
 
   const dayDifference = differenceInCalendarDays(toDate, fromDate);
   const { daysInYear } = getMonthDaysAndYearDays(toDate, dayCountBasis);

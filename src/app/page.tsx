@@ -16,6 +16,9 @@ const LoanInputCard = dynamic(() => import("./ui/loan-input-card"), {
 
 export default function Page() {
   const [result, setResult] = useState<LoanScheduleResult | undefined>();
+  const [baselineResult, setBaselineResult] = useState<
+    LoanScheduleResult | undefined
+  >();
   const [loanMeta, setLoanMeta] = useState<
     { principal: number; issueDate: Date } | undefined
   >();
@@ -26,18 +29,35 @@ export default function Page() {
     (form: LoanInputForm) => {
       setIsLoading(true);
       setResult(undefined);
+      setBaselineResult(undefined);
 
       // Имитируем небольшую задержку для визуального эффекта
       setTimeout(() => {
+        const termMonths =
+          form.loanTerm * (form.loanTermType === "y" ? 12 : 1);
         const result = generateLoanSchedule({
           ...form,
-          termMonths: form.loanTerm * (form.loanTermType === "y" ? 12 : 1),
+          termMonths,
           principal: form.loanAmount,
           annualInterestRatePercent: form.interestRate,
           earlyRepayments: form.earlyRepayments,
         });
 
+        // Параллельный расчёт "как было бы без досрочных" - только если
+        // они вообще есть, иначе сравнивать не с чем.
+        const baseline =
+          form.earlyRepayments && form.earlyRepayments.length > 0
+            ? generateLoanSchedule({
+                ...form,
+                termMonths,
+                principal: form.loanAmount,
+                annualInterestRatePercent: form.interestRate,
+                earlyRepayments: [],
+              })
+            : undefined;
+
         setResult(result);
+        setBaselineResult(baseline);
         setLoanMeta({ principal: form.loanAmount, issueDate: form.issueDate });
         setRoundingDecimals(form.roundingDecimals || 2);
         setIsLoading(false);
@@ -101,6 +121,7 @@ export default function Page() {
             {/* Сводка по кредиту и круговая диаграмма */}
             <LoanSummaryCards
               data={result}
+              baselineData={baselineResult}
               principal={loanMeta.principal}
               issueDate={loanMeta.issueDate}
               roundingDecimals={roundingDecimals}
