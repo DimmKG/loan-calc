@@ -232,7 +232,7 @@ export function calculateAccruedInterest(params: {
  * периодов. В отличие от closed-form calculateAnnuityMonthlyPayment
  * (номинальная ставка rate/12 на все периоды одинаково), здесь у каждого
  * периода своя реальная ставка - что и обеспечивает точное совпадение с
- * тем, как считают реальные банки (см. обоснование в плане/контексте сессии).
+ * тем, как считают реальные банки.
  */
 export function calculateAnnuityPaymentForSchedule(params: {
   principal: number;
@@ -292,6 +292,118 @@ export function calculateAnnuityPaymentForSchedule(params: {
     denom += suffix[k + 1];
   }
   return roundDecimals((principal * suffix[0]) / denom, roundingDecimals);
+}
+
+/**
+ * Считает, сколько периодов нужно фиксированному платежу, чтобы полностью
+ * погасить остаток, моделируя реальные даты (перенос выходных) и реальные
+ * проценты по факту дней (dayCountBasis) - без промежуточного округления,
+ * как и calculateAnnuityPaymentForSchedule. Возвращает null, если платёж не
+ * покрывает даже проценты первого периода (остаток не уменьшается) или если
+ * погашение не укладывается в maxPeriods.
+ */
+function simulatePeriodsToPayoff(
+  principal: number,
+  payment: number,
+  annualInterestRatePercent: number,
+  dayCountBasis: DayCountBasis,
+  startDate: Date,
+  paymentDayNumber: number,
+  moveHolidayToNextDay: boolean,
+  maxPeriods: number
+): number | null {
+  let balance = principal;
+  let periodStart = startDate;
+  let periods = 0;
+  while (balance > 0 && periods < maxPeriods) {
+    const periodEnd = moveToNextDate(periodStart, paymentDayNumber, moveHolidayToNextDay);
+    const interest = accruedInterestRaw(balance, annualInterestRatePercent, dayCountBasis, periodStart, periodEnd);
+    const principalPortion = payment - interest;
+    if (principalPortion <= 0) {
+      return null;
+    }
+    balance -= principalPortion;
+    periodStart = periodEnd;
+    periods++;
+  }
+  return balance <= 0 ? periods : null;
+}
+
+/**
+ * Считает, на сколько периодов сокращается срок кредита при DECREASE_TERM-
+ * досрочке. При fullInterestModeling (по умолчанию) - тем же методом
+ * дискретной симуляции по реальному графику, что и
+ * calculateAnnuityPaymentForSchedule: сравнивает число периодов до погашения
+ * остатка ДО досрочки (гипотетически, если бы её не было, с даты последнего
+ * платежа) с числом периодов до погашения остатка ПОСЛЕ досрочки (с даты
+ * самой досрочки), оба варианта тем же фиксированным annuityMonthlyPayment.
+ * При fullInterestModeling: false - старая непрерывная формула с номинальной
+ * ставкой rate/12 (calculateMonthsReduction).
+ */
+export function calculateMonthsReductionForSchedule(params: {
+  remainingPrincipalBefore: number;
+  remainingPrincipalAfter: number;
+  annuityMonthlyPayment: number;
+  annualInterestRatePercent: number;
+  dayCountBasis: DayCountBasis;
+  beforeStartDate: Date;
+  afterStartDate: Date;
+  paymentDayNumber: number;
+  moveHolidayToNextDay: boolean;
+  fullInterestModeling?: boolean;
+  /** Защитный потолок на число периодов симуляции. По умолчанию 1200 (100 лет). */
+  maxPeriods?: number;
+}): number {
+  const {
+    remainingPrincipalBefore,
+    remainingPrincipalAfter,
+    annuityMonthlyPayment,
+    annualInterestRatePercent,
+    dayCountBasis,
+    beforeStartDate,
+    afterStartDate,
+    paymentDayNumber,
+    moveHolidayToNextDay,
+    fullInterestModeling = true,
+    maxPeriods = 1200,
+  } = params;
+
+  if (!fullInterestModeling) {
+    const monthlyInterestRate = annualInterestRatePercent / 12 / 100;
+    const principalAmountPaid = remainingPrincipalBefore - remainingPrincipalAfter;
+    return calculateMonthsReduction(
+      principalAmountPaid,
+      remainingPrincipalBefore,
+      monthlyInterestRate,
+      annuityMonthlyPayment
+    );
+  }
+
+  const periodsBefore = simulatePeriodsToPayoff(
+    remainingPrincipalBefore,
+    annuityMonthlyPayment,
+    annualInterestRatePercent,
+    dayCountBasis,
+    beforeStartDate,
+    paymentDayNumber,
+    moveHolidayToNextDay,
+    maxPeriods
+  );
+  const periodsAfter = simulatePeriodsToPayoff(
+    remainingPrincipalAfter,
+    annuityMonthlyPayment,
+    annualInterestRatePercent,
+    dayCountBasis,
+    afterStartDate,
+    paymentDayNumber,
+    moveHolidayToNextDay,
+    maxPeriods
+  );
+
+  if (periodsBefore === null || periodsAfter === null) {
+    return 0;
+  }
+  return Math.max(0, periodsBefore - periodsAfter);
 }
 
 /**

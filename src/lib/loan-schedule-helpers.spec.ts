@@ -10,6 +10,7 @@ import {
   calculateMonthFromIssueDate,
   calculateMonthNumber,
   calculateMonthsReduction,
+  calculateMonthsReductionForSchedule,
   getMonthDaysAndYearDays,
   moveToNextDate,
   recalculateAmortizationPrincipal,
@@ -175,6 +176,139 @@ describe("calculateMonthsReduction (annuity term-reduction math)", () => {
     calculateMonthsReduction(100_000, 700_000, 0.01, payment);
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
+  });
+});
+
+describe("calculateMonthsReductionForSchedule (goal-seek-совместимый пересчёт срока)", () => {
+  const paymentDayNumber = 15;
+  const rate = 12;
+
+  it("возвращает 0, если платёж не покрывает даже проценты первого периода", () => {
+    const reduction = calculateMonthsReductionForSchedule({
+      remainingPrincipalBefore: 10_000_000,
+      remainingPrincipalAfter: 9_900_000,
+      annuityMonthlyPayment: 100,
+      annualInterestRatePercent: rate,
+      dayCountBasis: "ACTUAL_365",
+      beforeStartDate: new Date(2024, 2, 15),
+      afterStartDate: new Date(2024, 3, 13),
+      paymentDayNumber,
+      moveHolidayToNextDay: false,
+    });
+    expect(reduction).toBe(0);
+  });
+
+  it("сокращает срок на положительное целое число периодов при обычной досрочке", () => {
+    // Кредит на 24 месяца, тело долга 1 200 000, 12% годовых - платёж посчитан
+    // тем же goal-seek методом, что и в основном графике.
+    const payment = calculateAnnuityPaymentForSchedule({
+      principal: 1_200_000,
+      annualInterestRatePercent: rate,
+      dayCountBasis: "ACTUAL_365",
+      startDate: new Date(2024, 0, 15),
+      paymentDayNumber,
+      moveHolidayToNextDay: false,
+      termMonths: 24,
+      roundingDecimals: 2,
+    });
+    const reduction = calculateMonthsReductionForSchedule({
+      remainingPrincipalBefore: 1_100_000,
+      remainingPrincipalAfter: 1_000_000,
+      annuityMonthlyPayment: payment,
+      annualInterestRatePercent: rate,
+      dayCountBasis: "ACTUAL_365",
+      beforeStartDate: new Date(2024, 2, 15),
+      afterStartDate: new Date(2024, 3, 13),
+      paymentDayNumber,
+      moveHolidayToNextDay: false,
+    });
+    expect(reduction).toBeGreaterThan(0);
+    expect(Number.isInteger(reduction)).toBe(true);
+  });
+
+  it("сокращение растёт вместе с суммой досрочки при прочих равных", () => {
+    const payment = calculateAnnuityPaymentForSchedule({
+      principal: 1_200_000,
+      annualInterestRatePercent: rate,
+      dayCountBasis: "ACTUAL_365",
+      startDate: new Date(2024, 0, 15),
+      paymentDayNumber,
+      moveHolidayToNextDay: false,
+      termMonths: 24,
+      roundingDecimals: 2,
+    });
+    const smallReduction = calculateMonthsReductionForSchedule({
+      remainingPrincipalBefore: 1_100_000,
+      remainingPrincipalAfter: 1_050_000,
+      annuityMonthlyPayment: payment,
+      annualInterestRatePercent: rate,
+      dayCountBasis: "ACTUAL_365",
+      beforeStartDate: new Date(2024, 2, 15),
+      afterStartDate: new Date(2024, 3, 13),
+      paymentDayNumber,
+      moveHolidayToNextDay: false,
+    });
+    const bigReduction = calculateMonthsReductionForSchedule({
+      remainingPrincipalBefore: 1_100_000,
+      remainingPrincipalAfter: 700_000,
+      annuityMonthlyPayment: payment,
+      annualInterestRatePercent: rate,
+      dayCountBasis: "ACTUAL_365",
+      beforeStartDate: new Date(2024, 2, 15),
+      afterStartDate: new Date(2024, 3, 13),
+      paymentDayNumber,
+      moveHolidayToNextDay: false,
+    });
+    expect(bigReduction).toBeGreaterThan(smallReduction);
+  });
+
+  it("возвращает 0, если после досрочки долг уже погашен (remainingPrincipalAfter <= 0)", () => {
+    const payment = calculateAnnuityPaymentForSchedule({
+      principal: 1_200_000,
+      annualInterestRatePercent: rate,
+      dayCountBasis: "ACTUAL_365",
+      startDate: new Date(2024, 0, 15),
+      paymentDayNumber,
+      moveHolidayToNextDay: false,
+      termMonths: 24,
+      roundingDecimals: 2,
+    });
+    const reduction = calculateMonthsReductionForSchedule({
+      remainingPrincipalBefore: 100_000,
+      remainingPrincipalAfter: 0,
+      annuityMonthlyPayment: payment,
+      annualInterestRatePercent: rate,
+      dayCountBasis: "ACTUAL_365",
+      beforeStartDate: new Date(2024, 2, 15),
+      afterStartDate: new Date(2024, 3, 13),
+      paymentDayNumber,
+      moveHolidayToNextDay: false,
+    });
+    expect(reduction).toBeGreaterThan(0);
+  });
+
+  it("fullInterestModeling: false делегирует старой непрерывной формуле calculateMonthsReduction", () => {
+    const monthlyRate = rate / 12 / 100;
+    const payment = calculateAnnuityMonthlyPayment({
+      principal: 1_000_000,
+      monthlyInterestRate: monthlyRate,
+      termMonths: 24,
+      roundingDecimals: 2,
+    });
+    const expected = calculateMonthsReduction(100_000, 700_000, monthlyRate, payment);
+    const actual = calculateMonthsReductionForSchedule({
+      remainingPrincipalBefore: 700_000,
+      remainingPrincipalAfter: 600_000,
+      annuityMonthlyPayment: payment,
+      annualInterestRatePercent: rate,
+      dayCountBasis: "ACTUAL_365",
+      beforeStartDate: new Date(2024, 2, 15),
+      afterStartDate: new Date(2024, 3, 13),
+      paymentDayNumber,
+      moveHolidayToNextDay: false,
+      fullInterestModeling: false,
+    });
+    expect(actual).toBe(expected);
   });
 });
 

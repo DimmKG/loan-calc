@@ -8,7 +8,7 @@ import {
   calculateAnnuityMonthlyPayment,
   calculateAnnuityPaymentForSchedule,
   calculateMonthNumber,
-  calculateMonthsReduction,
+  calculateMonthsReductionForSchedule,
   moveToNextDate,
   recalculateAmortizationPrincipal,
   recalculateAnnuityPaymentAfterPrepayment,
@@ -755,19 +755,25 @@ function applyEarlyRepayment(
       updatedSharedParams.pendingInterestAdjustment =
         sharedParams.pendingInterestAdjustment + accruedInterest + delayedInterest;
 
-      // Пересчёт срока для DECREASE_TERM пока намеренно оставлен на старой
-      // закрытой формуле даже при fullInterestModeling: true. Для ANNUITY
-      // завершение графика управляется остатком долга (isFinalPayment), а
-      // не этим счётчиком, так что его точность не критична для сумм
-      // платежей - а goal-seek-совместимая симуляция (через
-      // calculateMonthsReductionForSchedule) оказалась сложнее корректно
-      // отладить, чем стоит в рамках этого фикса. Вернуться к этому отдельно.
-      const monthsReduction = calculateMonthsReduction(
-        principalAmountPaid,
-        sharedParams.remainingPrincipal,
-        sharedParams.monthlyInterestRate,
-        sharedParams.annuityMonthlyPayment
-      );
+      // Пересчёт срока для DECREASE_TERM - тем же методом, что и сам
+      // аннуитетный платёж. Для ANNUITY завершение графика
+      // управляется остатком долга (isFinalPayment), а не этим счётчиком, так
+      // что его точность не критична для сумм платежей - но она важна, если
+      // позже случится DECREASE_PAYMENT: он пересчитывает платёж на
+      // periodsRemainingForRecompute периодов, унаследованный от
+      // termMonthsToCalculate.
+      const monthsReduction = calculateMonthsReductionForSchedule({
+        remainingPrincipalBefore: sharedParams.remainingPrincipal,
+        remainingPrincipalAfter: updatedSharedParams.remainingPrincipal,
+        annuityMonthlyPayment: sharedParams.annuityMonthlyPayment,
+        annualInterestRatePercent: sharedParams.annualInterestRatePercent,
+        dayCountBasis: sharedParams.dayCountBasis,
+        beforeStartDate: sharedParams.currentDate,
+        afterStartDate: earlyRepayment.earlyRepaymentDate,
+        paymentDayNumber,
+        moveHolidayToNextDay,
+        fullInterestModeling: interestModelingOptions.fullInterestModeling,
+      });
 
       if (monthsReduction > 0) {
         updatedSharedParams.remainingTermMonths = Math.max(
