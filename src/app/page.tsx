@@ -16,6 +16,9 @@ const LoanInputCard = dynamic(() => import("./ui/loan-input-card"), {
 
 export default function Page() {
   const [result, setResult] = useState<LoanScheduleResult | undefined>();
+  const [loanMeta, setLoanMeta] = useState<
+    { principal: number; issueDate: Date } | undefined
+  >();
   const [roundingDecimals, setRoundingDecimals] = useState(2);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -35,6 +38,7 @@ export default function Page() {
         });
 
         setResult(result);
+        setLoanMeta({ principal: form.loanAmount, issueDate: form.issueDate });
         setRoundingDecimals(form.roundingDecimals || 2);
         setIsLoading(false);
       }, 200);
@@ -92,11 +96,13 @@ export default function Page() {
           </Card>
         )}
 
-        {result?.schedule.length && (
+        {result?.schedule.length && loanMeta && (
           <div className="space-y-6">
             {/* Сводка по кредиту и круговая диаграмма */}
             <LoanSummaryCards
               data={result}
+              principal={loanMeta.principal}
+              issueDate={loanMeta.issueDate}
               roundingDecimals={roundingDecimals}
             />
 

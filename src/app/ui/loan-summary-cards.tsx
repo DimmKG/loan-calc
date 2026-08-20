@@ -8,109 +8,56 @@ import {
 } from "../../components/ui/card";
 import LoanPieChartCard from "./loan-pie-chart-card";
 import PaymentsChartDialog from "./payments-chart-dialog";
-import { useEffect, useState } from "react";
-import { differenceInMonths, format } from "date-fns";
-import { LoanScheduleEntry, LoanScheduleResult } from "../../lib/loan-lib";
+import { useMemo, useState } from "react";
+import { format } from "date-fns";
+import { LoanScheduleResult } from "../../lib/loan-lib";
+import { calculateLoanSummary, groupScheduleByMonth } from "../../lib/loan-statistics";
 import { Badge } from "../../components/ui/badge";
 
-interface LoanSummary {
-  totalPayments: number;
-  totalPrincipal: number;
-  totalInterest: number;
-  loanTerm: string;
-  monthlyPayment: number;
+function formatLoanTermRu(months: number): string {
+  const years = Math.floor(months / 12);
+  const remainingMonths = months % 12;
+
+  let loanTerm = "";
+  if (years > 0) {
+    loanTerm += `${years} ${years === 1 ? "год" : years < 5 ? "года" : "лет"}`;
+  }
+  if (remainingMonths > 0) {
+    if (loanTerm) loanTerm += " ";
+    loanTerm += `${remainingMonths} ${
+      remainingMonths === 1
+        ? "месяц"
+        : remainingMonths < 5
+        ? "месяца"
+        : "месяцев"
+    }`;
+  }
+  return loanTerm;
 }
 
 export default function LoanSummaryCards({
   data,
+  principal,
+  issueDate,
   roundingDecimals,
 }: {
-  data: LoanScheduleResult
+  data: LoanScheduleResult;
+  principal: number;
+  issueDate: Date;
   roundingDecimals: number;
 }) {
   const [isChartOpen, setIsChartOpen] = useState(false);
-  const [groupedData, setGroupedData] = useState<LoanScheduleEntry[]>([]);
-  const [summary, setSummary] = useState<LoanSummary | undefined>(undefined);
 
-  useEffect(() => {
-    const { schedule, startMonthlyPayment } = data
-    let groupByMonth = Object.groupBy(schedule, (item) =>
-        format(item.paymentDate, "yyyy-MM")
-      );
-      const groupedData = Object.entries(groupByMonth).map(
-        ([key, value]): LoanScheduleEntry => ({
-          monthNumber: value[0].monthNumber,
-          paymentDate: new Date(key),
-          paymentAmount: value.reduce(
-            (sum, item) => sum + item.paymentAmount,
-            0
-          ),
-          principalAmount: value.reduce(
-            (sum, item) => sum + item.principalAmount,
-            0
-          ),
-          interestAmount: value.reduce(
-            (sum, item) => sum + item.interestAmount,
-            0
-          ),
-          remainingPrincipal: value.reduce(
-            (sum, item) => sum + item.remainingPrincipal,
-            0
-          ),
-        })
-      );
-      setGroupedData(groupedData);
-      // Вычисляем сводку по кредиту
-      const totalPayments = schedule.reduce(
-        (sum, item) => sum + item.paymentAmount,
-        0
-      );
-      const totalPrincipal = schedule.reduce(
-        (sum, item) => sum + item.principalAmount,
-        0
-      );
-      const totalInterest = schedule.reduce(
-        (sum, item) => sum + item.interestAmount,
-        0
-      );
+  const summary = useMemo(
+    () => calculateLoanSummary({ result: data, principal, issueDate }),
+    [data, principal, issueDate]
+  );
+  const groupedData = useMemo(
+    () => groupScheduleByMonth(data.schedule),
+    [data]
+  );
 
-      const months =
-        differenceInMonths(
-            schedule[schedule.length - 1].paymentDate,
-            schedule[0].paymentDate
-        ) + 1;
-      const years = Math.floor(months / 12);
-      const remainingMonths = months % 12;
-
-      let loanTerm = "";
-      if (years > 0) {
-        loanTerm += `${years} ${
-          years === 1 ? "год" : years < 5 ? "года" : "лет"
-        }`;
-      }
-      if (remainingMonths > 0) {
-        if (loanTerm) loanTerm += " ";
-        loanTerm += `${remainingMonths} ${
-          remainingMonths === 1
-            ? "месяц"
-            : remainingMonths < 5
-            ? "месяца"
-            : "месяцев"
-        }`;
-      }
-
-      const monthlyPayment = startMonthlyPayment;
-
-      setSummary({
-        totalPayments,
-        totalPrincipal,
-        totalInterest,
-        loanTerm,
-        monthlyPayment,
-      });
-  }, [data])
-
-  if(!summary) return null
+  if (!summary) return null;
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -173,11 +120,37 @@ export default function LoanSummaryCards({
                 Ежемесячный платёж
               </div>
             </div>
+            <div className="text-center p-3 bg-rose-50 dark:bg-rose-950 rounded-lg">
+              <div className="text-lg font-bold text-rose-600 dark:text-rose-400 break-words">
+                {summary.overpaymentPercent.toLocaleString("ru-RU", {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}
+                %
+              </div>
+              <div className="text-xs text-rose-600 dark:text-rose-400">
+                Переплата
+              </div>
+            </div>
+            <div className="text-center p-3 bg-teal-50 dark:bg-teal-950 rounded-lg">
+              <div className="text-lg font-bold text-teal-600 dark:text-teal-400 break-words">
+                {summary.fullCostOfCreditPercent === null
+                  ? "—"
+                  : summary.fullCostOfCreditPercent.toLocaleString("ru-RU", {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 3,
+                    })}
+                {summary.fullCostOfCreditPercent !== null && "%"}
+              </div>
+              <div className="text-xs text-teal-600 dark:text-teal-400">
+                Полная стоимость кредита
+              </div>
+            </div>
           </div>
 
           <div className="text-center mb-4">
             <Badge variant="secondary" className="text-base px-3 py-1">
-              Срок кредита: {summary.loanTerm}
+              Срок кредита: {formatLoanTermRu(summary.termMonths)}
             </Badge>
           </div>
 
@@ -186,7 +159,7 @@ export default function LoanSummaryCards({
             groupedData={groupedData.map((value) => ({
               paymentDate: format(value.paymentDate, "yyyy-MM"),
               principalAmount: Number(
-                value.paymentAmount.toFixed(roundingDecimals)
+                value.principalAmount.toFixed(roundingDecimals)
               ),
               interestAmount: Number(
                 value.interestAmount.toFixed(roundingDecimals)

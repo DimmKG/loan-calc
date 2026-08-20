@@ -5,6 +5,7 @@ export interface LoanInputForm {
     loanTermType: "y" | "m";
     interestRate: number;
     interestOnlyFirstPeriod?: boolean;
+    interestOnlyPeriodExtendsTerm?: boolean;
     dayCountBasis?: "ACTUAL_365" | "ACTUAL_360" | "ACTUAL_ACTUAL";
     roundingDecimals?: number;
     issueDate: Date;
@@ -17,5 +18,6 @@ export interface LoanInputForm {
         periodicity?: "ONCE" | "MONTHLY" | "QUARTERLY" | "YEARLY";
         earlyRepaymentAmount?: number;
         repaymentType?: "DECREASE_TERM" | "DECREASE_PAYMENT";
+        syncWithPaymentDate?: boolean;
     }[];
 }
