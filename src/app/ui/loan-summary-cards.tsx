@@ -37,11 +37,13 @@ function formatLoanTermRu(months: number): string {
 
 export default function LoanSummaryCards({
   data,
+  baselineData,
   principal,
   issueDate,
   roundingDecimals,
 }: {
   data: LoanScheduleResult;
+  baselineData?: LoanScheduleResult;
   principal: number;
   issueDate: Date;
   roundingDecimals: number;
@@ -52,6 +54,13 @@ export default function LoanSummaryCards({
     () => calculateLoanSummary({ result: data, principal, issueDate }),
     [data, principal, issueDate]
   );
+  const baselineSummary = useMemo(
+    () =>
+      baselineData
+        ? calculateLoanSummary({ result: baselineData, principal, issueDate })
+        : undefined,
+    [baselineData, principal, issueDate]
+  );
   const groupedData = useMemo(
     () => groupScheduleByMonth(data.schedule),
     [data]
@@ -59,7 +68,15 @@ export default function LoanSummaryCards({
 
   if (!summary) return null;
 
+  const interestSaved = baselineSummary
+    ? baselineSummary.totalInterest - summary.totalInterest
+    : 0;
+  const monthsShortened = baselineSummary
+    ? baselineSummary.termMonths - summary.termMonths
+    : 0;
+
   return (
+    <div className="space-y-6">
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <LoanPieChartCard
         totalInterest={summary.totalInterest}
@@ -170,6 +187,45 @@ export default function LoanSummaryCards({
           />
         </CardContent>
       </Card>
+    </div>
+
+    {baselineSummary && (
+      <Card className="border-green-200 dark:border-green-900 bg-green-50/50 dark:bg-green-950/30">
+        <CardHeader>
+          <CardTitle className="text-green-700 dark:text-green-400">
+            Экономия благодаря досрочным погашениям
+          </CardTitle>
+          <CardDescription>
+            По сравнению со сценарием без досрочных погашений
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="text-center p-3 bg-white/60 dark:bg-black/20 rounded-lg">
+              <div className="text-lg font-bold text-green-700 dark:text-green-400 break-words">
+                {interestSaved.toLocaleString("ru-RU", {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}
+              </div>
+              <div className="text-xs text-green-700 dark:text-green-400">
+                Сэкономлено на процентах
+              </div>
+            </div>
+            <div className="text-center p-3 bg-white/60 dark:bg-black/20 rounded-lg">
+              <div className="text-lg font-bold text-green-700 dark:text-green-400 break-words">
+                {monthsShortened > 0
+                  ? formatLoanTermRu(monthsShortened)
+                  : "Срок не изменился"}
+              </div>
+              <div className="text-xs text-green-700 dark:text-green-400">
+                Срок сокращён
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    )}
     </div>
   );
 }

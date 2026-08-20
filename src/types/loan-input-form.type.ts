@@ -11,6 +11,8 @@ export interface LoanInputForm {
     issueDate: Date;
     paymentDayNumber?: number;
     moveHolidayToNextDay?: boolean;
+    fullInterestModeling?: boolean;
+    interestModelingHorizonMonths?: number;
     earlyRepayments?: {
         id: string;
         earlyRepaymentDateStart: Date;

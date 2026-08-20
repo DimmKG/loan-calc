@@ -25,7 +25,12 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { ChevronsUpDown, Plus, Trash2, Download, Upload } from "lucide-react";
+import { ChevronsUpDown, Plus, Trash2, Download, Upload, Info } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useCallback, useEffect, useState } from "react";
 import { FormMessage } from "@/components/ui/form";
 import { z } from "zod";
@@ -44,6 +49,40 @@ const earlyRepaymentSchema = z.object({
   repaymentType: z.enum(["DECREASE_TERM", "DECREASE_PAYMENT"]),
   syncWithPaymentDate: z.boolean().optional(),
 });
+
+const PERIODICITY_LABELS: Record<string, string> = {
+  ONCE: "один раз",
+  MONTHLY: "ежемесячно",
+  QUARTERLY: "ежеквартально",
+  YEARLY: "ежегодно",
+};
+
+const REPAYMENT_TYPE_LABELS: Record<string, string> = {
+  DECREASE_PAYMENT: "уменьшение платежа",
+  DECREASE_TERM: "уменьшение срока",
+};
+
+function formatEarlyRepaymentSummary(er: {
+  earlyRepaymentAmount?: number;
+  periodicity?: string;
+  repaymentType?: string;
+  earlyRepaymentDateStart: Date;
+}): string {
+  const amount =
+    er.earlyRepaymentAmount != null
+      ? `${er.earlyRepaymentAmount.toLocaleString("ru-RU")} ₽`
+      : "—";
+  const periodicity = er.periodicity ? PERIODICITY_LABELS[er.periodicity] : "";
+  const repaymentType = er.repaymentType
+    ? REPAYMENT_TYPE_LABELS[er.repaymentType]
+    : "";
+  const date = er.earlyRepaymentDateStart
+    ? format(er.earlyRepaymentDateStart, "dd.MM.yyyy")
+    : "";
+  return [amount, periodicity, repaymentType, date && `с ${date}`]
+    .filter(Boolean)
+    .join(" · ");
+}
 
 export default function LoanInputCard({
   onFormSubmit,
@@ -67,6 +106,14 @@ export default function LoanInputCard({
       interestOnlyFirstPeriod: z.boolean().optional(),
       interestOnlyPeriodExtendsTerm: z.boolean().optional(),
       moveHolidayToNextDay: z.boolean().optional(),
+      fullInterestModeling: z.boolean().optional(),
+      interestModelingHorizonMonths: z.union([
+        z.coerce
+          .number()
+          .int("Должно быть целым числом")
+          .positive("Должно быть больше 0"),
+        z.undefined(),
+      ]),
       dayCountBasis: z
         .enum(["ACTUAL_365", "ACTUAL_360", "ACTUAL_ACTUAL"])
         .optional(),
@@ -104,15 +151,17 @@ export default function LoanInputCard({
     interestRate: 10,
     interestOnlyFirstPeriod: false,
     interestOnlyPeriodExtendsTerm: false,
-    dayCountBasis: "ACTUAL_365",
+    dayCountBasis: "ACTUAL_ACTUAL",
     roundingDecimals: 2,
     issueDate: new Date(),
     paymentDayNumber: 20,
     moveHolidayToNextDay: false,
+    fullInterestModeling: true,
+    interestModelingHorizonMonths: undefined,
     earlyRepayments: [],
   };
 
-  // Get initial values from localStorage or use defaults
+  // Берём начальные значения из localStorage или используем значения по умолчанию
   const getInitialValues = (): LoanInputForm => {
     try {
       const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
@@ -132,7 +181,7 @@ export default function LoanInputCard({
           parsed.dayCountBasis
         )
           ? parsed.dayCountBasis
-          : "ACTUAL_365",
+          : "ACTUAL_ACTUAL",
         roundingDecimals:
           parsed.roundingDecimals === "" || parsed.roundingDecimals == null
             ? 2
@@ -146,6 +195,12 @@ export default function LoanInputCard({
           parsed.interestOnlyPeriodExtendsTerm
         ),
         moveHolidayToNextDay: Boolean(parsed.moveHolidayToNextDay),
+        // Отсутствие поля (старые сохранённые настройки до появления этой
+        // фичи) трактуется как "не выключено явно" -> точное моделирование.
+        fullInterestModeling: parsed.fullInterestModeling !== false,
+        interestModelingHorizonMonths: parsed.interestModelingHorizonMonths
+          ? Number(parsed.interestModelingHorizonMonths)
+          : undefined,
         earlyRepayments: (parsed.earlyRepayments || []).map((er: any) => ({
           id: er.id || `er-${Date.now()}-${Math.random()}`,
           earlyRepaymentDateStart: er.earlyRepaymentDateStart
@@ -171,7 +226,15 @@ export default function LoanInputCard({
     defaultValues: getInitialValues(),
   });
 
-  // Persist settings to localStorage on any change
+  // Локальное UI-состояние "какие карточки досрочного погашения раскрыты".
+  // Не часть формы: не сохраняется в localStorage и не участвует в
+  // экспорте/импорте. Карточки, загруженные при монтировании, свёрнуты по
+  // умолчанию; свежедобавленная карточка сразу открывается.
+  const [openEarlyRepaymentIds, setOpenEarlyRepaymentIds] = useState<
+    Set<string>
+  >(new Set());
+
+  // Сохраняем настройки в localStorage при любом изменении
   useEffect(() => {
     const subscription = form.watch((value) => {
       try {
@@ -216,6 +279,7 @@ export default function LoanInputCard({
         syncWithPaymentDate: false,
       },
     ]);
+    setOpenEarlyRepaymentIds((prev) => new Set(prev).add(newId));
   }, [form]);
 
   const removeEarlyRepayment = useCallback((id: string) => {
@@ -224,7 +288,24 @@ export default function LoanInputCard({
       "earlyRepayments",
       currentEarlyRepayments.filter((er) => er.id !== id)
     );
+    setOpenEarlyRepaymentIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
   }, [form]);
+
+  const toggleEarlyRepaymentOpen = useCallback((id: string, open: boolean) => {
+    setOpenEarlyRepaymentIds((prev) => {
+      const next = new Set(prev);
+      if (open) {
+        next.add(id);
+      } else {
+        next.delete(id);
+      }
+      return next;
+    });
+  }, []);
 
   function onSubmit(data: LoanInputForm) {
     onFormSubmit?.(data);
@@ -282,7 +363,7 @@ export default function LoanInputCard({
             importedData.dayCountBasis
           )
             ? importedData.dayCountBasis
-            : "ACTUAL_365",
+            : "ACTUAL_ACTUAL",
           roundingDecimals:
             importedData.roundingDecimals === "" ||
             importedData.roundingDecimals == null
@@ -299,6 +380,10 @@ export default function LoanInputCard({
             importedData.interestOnlyPeriodExtendsTerm
           ),
           moveHolidayToNextDay: Boolean(importedData.moveHolidayToNextDay),
+          fullInterestModeling: importedData.fullInterestModeling !== false,
+          interestModelingHorizonMonths: importedData.interestModelingHorizonMonths
+            ? Number(importedData.interestModelingHorizonMonths)
+            : undefined,
           earlyRepayments: (importedData.earlyRepayments || []).map((er: any) => ({
             id: er.id || `er-${Date.now()}-${Math.random()}`,
             earlyRepaymentDateStart: er.earlyRepaymentDateStart
@@ -515,7 +600,14 @@ export default function LoanInputCard({
             {/* Досрочные погашения */}
             <Collapsible className="mb-6" defaultOpen>
               <div className="flex justify-between items-center gap-2 mb-3">
-                <h4 className="text-sm font-semibold">Досрочные погашения</h4>
+                <h4 className="text-sm font-semibold">
+                  Досрочные погашения
+                  {(form.watch("earlyRepayments")?.length ?? 0) > 0 && (
+                    <span className="ml-2 text-xs font-normal text-muted-foreground">
+                      ({form.watch("earlyRepayments")?.length})
+                    </span>
+                  )}
+                </h4>
                 <CollapsibleTrigger asChild>
                   <Button variant="ghost" size="icon" className="size-8">
                     <ChevronsUpDown />
@@ -525,26 +617,48 @@ export default function LoanInputCard({
               </div>
               <CollapsibleContent>
                 <div className="space-y-4">
-                  {form.watch("earlyRepayments")?.map((er, index) => (
-                    <div
+                  {form.watch("earlyRepayments")?.map((er, index) => {
+                    const isOpen = openEarlyRepaymentIds.has(er.id);
+                    return (
+                    <Collapsible
                       key={er.id}
+                      open={isOpen}
+                      onOpenChange={(open) =>
+                        toggleEarlyRepaymentOpen(er.id, open)
+                      }
                       className="p-4 border rounded-lg space-y-4"
                     >
-                      <div className="flex justify-between items-center">
-                        <span className="text-sm font-medium">
-                          Досрочное погашение
-                        </span>
+                      <div className="flex justify-between items-center gap-2">
+                        <CollapsibleTrigger asChild>
+                          <button
+                            type="button"
+                            className="flex-1 flex items-center justify-between gap-2 text-left"
+                          >
+                            <div>
+                              <span className="text-sm font-medium block">
+                                Досрочное погашение
+                              </span>
+                              {!isOpen && (
+                                <span className="text-xs text-muted-foreground">
+                                  {formatEarlyRepaymentSummary(er)}
+                                </span>
+                              )}
+                            </div>
+                            <ChevronsUpDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+                          </button>
+                        </CollapsibleTrigger>
                         <Button
                           type="button"
                           variant="ghost"
                           size="icon"
-                          className="size-6"
+                          className="size-6 shrink-0"
                           onClick={() => removeEarlyRepayment(er.id)}
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>
                       </div>
 
+                      <CollapsibleContent className="space-y-4">
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <FormField
                           control={form.control}
@@ -703,8 +817,10 @@ export default function LoanInputCard({
                           </FormItem>
                         )}
                       />
-                    </div>
-                  ))}
+                      </CollapsibleContent>
+                    </Collapsible>
+                    );
+                  })}
 
                   <Button
                     type="button"
@@ -844,6 +960,65 @@ export default function LoanInputCard({
                       </FormItem>
                     )}
                   />
+                  <FormField
+                    control={form.control}
+                    name="fullInterestModeling"
+                    render={({ field }) => (
+                      <FormItem className="flex items-center gap-2">
+                        <FormControl>
+                          <Checkbox
+                            checked={field.value}
+                            onCheckedChange={field.onChange}
+                          />
+                        </FormControl>
+                        <FormLabel className="text-sm flex items-center gap-1">
+                          Полное моделирование процента
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Info className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
+                            </TooltipTrigger>
+                            <TooltipContent className="max-w-xs">
+                              Банки при расчёте платежа моделируют каждый
+                              день с учётом переноса дат на будни — это
+                              влияет на проценты и итоговую сумму платежа.
+                              Отключение возвращает к упрощённой формуле
+                              (ставка/12), которая может давать небольшое
+                              расхождение с реальным банковским графиком на
+                              длинных сроках.
+                            </TooltipContent>
+                          </Tooltip>
+                        </FormLabel>
+                      </FormItem>
+                    )}
+                  />
+                  {form.watch("fullInterestModeling") && (
+                    <FormField
+                      control={form.control}
+                      name="interestModelingHorizonMonths"
+                      render={({ field }) => (
+                        <FormItem className="ml-6 max-w-[260px]">
+                          <FormLabel className="text-xs text-muted-foreground">
+                            Количество платежей для моделирования
+                          </FormLabel>
+                          <FormControl>
+                            <Input
+                              type="number"
+                              placeholder="весь срок"
+                              value={field.value ?? ""}
+                              onChange={(e) => {
+                                const value = e.target.value;
+                                field.onChange(
+                                  value === "" ? undefined : Number(value)
+                                );
+                              }}
+                              className="h-9"
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  )}
                 </div>
               </CollapsibleContent>
             </Collapsible>

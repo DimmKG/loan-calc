@@ -6,8 +6,9 @@ import {
   calculateAccruedInterest,
   calculateAmortizationMonthsReduction,
   calculateAnnuityMonthlyPayment,
+  calculateAnnuityPaymentForSchedule,
   calculateMonthNumber,
-  calculateMonthsReduction,
+  calculateMonthsReductionForSchedule,
   moveToNextDate,
   recalculateAmortizationPrincipal,
   recalculateAnnuityPaymentAfterPrepayment,
@@ -59,8 +60,22 @@ export interface LoanScheduleParams {
   interestOnlyPeriodExtendsTerm?: boolean;
   moveHolidayToNextDay?: boolean;
   dayCountBasis?: DayCountBasis;
-  /** Number of fractional digits to round monetary amounts to. Defaults to 2. */
+  /** Число знаков после запятой для округления денежных сумм. По умолчанию 2. */
   roundingDecimals?: number;
+  /**
+   * Если true (по умолчанию), аннуитетный платёж считается методом
+   * goal-seek по реальному графику (реальные даты платежей, перенос
+   * выходных, факт дней по dayCountBasis) - как считают реальные банки.
+   * Если false - используется закрытая формула с номинальной ставкой
+   * rate/12 (calculateAnnuityMonthlyPayment), как было исторически.
+   */
+  fullInterestModeling?: boolean;
+  /**
+   * Сколько ближайших платежей моделировать точно при fullInterestModeling.
+   * По умолчанию (undefined) - весь оставшийся срок. Не учитывается, если
+   * fullInterestModeling === false.
+   */
+  interestModelingHorizonMonths?: number;
   earlyRepayments?: EarlyRepaymentParams[];
 }
 
@@ -80,6 +95,16 @@ interface LoanCalcSharedParams {
   remainingInterestAmount: number;
   monthNumber: number;
   remainingTermMonths: number;
+  /**
+   * Накопленная поправка к ближайшему регулярному аннуитетному платежу,
+   * возникающая от DECREASE_TERM-досрочек, попавших строго до даты этого
+   * платежа. Банк не просто пересчитывает проценты по факту дней - он ещё
+   * "отдаёт" в виде уменьшения суммы платежа проценты, которые набежали бы
+   * на списанную часть долга, если бы она оставалась в теле кредита до
+   * даты платежа (а не до даты самой досрочки). Сбрасывается в 0 после
+   * того, как применена к очередному платежу (регулярному или льготному).
+   */
+  pendingInterestAdjustment: number;
 }
 
 export interface LoanScheduleEntry {
@@ -114,6 +139,8 @@ export function generateLoanSchedule(
     roundingDecimals = 2,
     earlyRepayments = [],
     moveHolidayToNextDay = false,
+    fullInterestModeling = true,
+    interestModelingHorizonMonths,
   } = params;
   issueDate.setHours(0, 0, 0, 0);
 
@@ -123,6 +150,10 @@ export function generateLoanSchedule(
     throw new Error("annualInterestRatePercent must be >= 0");
 
   const paymentDayNumber = params.paymentDayNumber ?? issueDate.getDate();
+  const interestModelingOptions: InterestModelingOptions = {
+    fullInterestModeling,
+    interestModelingHorizonMonths,
+  };
 
   const earlyRepaymentRecords: Record<number, EarlyRepaymentRecord> = {};
   earlyRepayments.forEach((earlyRepayment, index) => {
@@ -161,6 +192,32 @@ export function generateLoanSchedule(
   const termMonthsToCalculate = interestOnlyFirstPeriod
     ? initialRemainingTermMonths - 1
     : initialRemainingTermMonths;
+  // Аннуитетный платёж: по умолчанию считаем методом goal-seek по реальному
+  // графику (реальные даты, перенос выходных, факт дней) - так, как
+  // фактически считают реальные банки (см. calculateAnnuityPaymentForSchedule).
+  // fullInterestModeling: false возвращает старую закрытую формулу
+  // (номинальная ставка rate/12 на все периоды).
+  const annuityPaymentStartDate = interestOnlyFirstPeriod
+    ? moveToNextDate(issueDate, paymentDayNumber, moveHolidayToNextDay)
+    : issueDate;
+  const annuityMonthlyPaymentValue = fullInterestModeling
+    ? calculateAnnuityPaymentForSchedule({
+        principal,
+        annualInterestRatePercent,
+        dayCountBasis,
+        startDate: annuityPaymentStartDate,
+        paymentDayNumber,
+        moveHolidayToNextDay,
+        termMonths: termMonthsToCalculate,
+        roundingDecimals,
+        horizonMonths: interestModelingHorizonMonths,
+      })
+    : calculateAnnuityMonthlyPayment({
+        principal,
+        monthlyInterestRate: annualInterestRatePercent / 12 / 100,
+        termMonths: termMonthsToCalculate,
+        roundingDecimals,
+      });
   let sharedParams: LoanCalcSharedParams = {
     loanType,
     previousDate: issueDate,
@@ -174,13 +231,9 @@ export function generateLoanSchedule(
       principal / termMonthsToCalculate,
       roundingDecimals
     ),
-    annuityMonthlyPayment: calculateAnnuityMonthlyPayment({
-      principal,
-      monthlyInterestRate: annualInterestRatePercent / 12 / 100,
-      termMonths: termMonthsToCalculate,
-      roundingDecimals,
-    }),
+    annuityMonthlyPayment: annuityMonthlyPaymentValue,
     remainingInterestAmount: 0,
+    pendingInterestAdjustment: 0,
     roundingDecimals,
     dayCountBasis,
     monthNumber: 1,
@@ -192,18 +245,16 @@ export function generateLoanSchedule(
       ? sharedParams.annuityMonthlyPayment
       : sharedParams.amortizationPrincipal;
 
-  // Аннуитетный платёж рассчитан по номинальной месячной ставке
-  // (annualRate/12), а проценты начисляются по факту календарных дней
-  // (ACT/365 и т.п.). Эти две модели расходятся на доли процента за
-  // период, и за долгий срок (ипотека на 20-30 лет) расхождение
-  // накапливается: по номинальному числу периодов остаток долга может
-  // не дойти до нуля. Как и у банков, даём графику органически "дожить"
-  // до нуля вместо того, чтобы силой впихивать остаток в один платёж
-  // ровно на termMonths-м месяце — иначе последний платёж может в
-  // полтора-два раза превышать обычный. maxOverrunMonths - защитный
-  // потолок на случай аномальных входных данных (не должен достигаться
-  // в реальных сценариях).
-  const maxOverrunMonths = 24;
+  // При fullInterestModeling (по умолчанию) аннуитетный платёж считается
+  // goal-seek'ом по реальному графику, поэтому остаток должен обнуляться
+  // практически точно к termMonths-му периоду - расхождение остаётся
+  // только на уровне копеек (округление). При fullInterestModeling: false
+  // (старая закрытая формула rate/12) расхождение может накапливаться
+  // сильнее на длинных сроках. В обоих случаях даём графику органически
+  // "дожить" до нуля вместо форсированного платежа ровно на termMonths-м
+  // месяце. maxOverrunMonths - защитный потолок на случай аномальных
+  // входных данных (не должен достигаться в реальных сценариях).
+  const maxOverrunMonths = 3;
   const maxMonthNumber = initialRemainingTermMonths + maxOverrunMonths;
 
   while (
@@ -242,7 +293,8 @@ export function generateLoanSchedule(
         issueDate,
         paymentDayNumber,
         moveHolidayToNextDay,
-        sharedParams.termMonthsToCalculate
+        sharedParams.termMonthsToCalculate,
+        interestModelingOptions
       );
       sharedParams = updatedSharedParams;
       schedule.push(...loanSchedule);
@@ -318,7 +370,8 @@ export function generateLoanSchedule(
           issueDate,
           paymentDayNumber,
           moveHolidayToNextDay,
-          sharedParams.termMonthsToCalculate
+          sharedParams.termMonthsToCalculate,
+          interestModelingOptions
         );
         sharedParams = updatedSharedParams;
         schedule.push(...loanSchedule);
@@ -335,6 +388,10 @@ export function generateLoanSchedule(
           }
         }
       }
+
+      // Льготный платёж - не аннуитетный, поправка к нему неприменима; и
+      // она не должна "утечь" на следующий (уже настоящий регулярный) платёж.
+      sharedParams.pendingInterestAdjustment = 0;
 
       sharedParams = updateParamsOnNextDate(
         sharedParams,
@@ -381,11 +438,15 @@ export function generateLoanSchedule(
       loanType,
       interestAmount,
       remainingPrincipal: sharedParams.remainingPrincipal,
-      annuityMonthlyPayment: sharedParams.annuityMonthlyPayment,
+      annuityMonthlyPayment: roundDecimals(
+        sharedParams.annuityMonthlyPayment - sharedParams.pendingInterestAdjustment,
+        roundingDecimals
+      ),
       amortizationPrincipal: sharedParams.amortizationPrincipal,
       roundingDecimals,
     });
     sharedParams.remainingPrincipal = regularPayment.remainingPrincipalAfter;
+    sharedParams.pendingInterestAdjustment = 0;
     schedule.push({
       monthNumber: calculateMonthNumber(
         sharedParams.nextDate,
@@ -419,7 +480,8 @@ export function generateLoanSchedule(
         issueDate,
         paymentDayNumber,
         moveHolidayToNextDay,
-        Math.max(0, sharedParams.termMonthsToCalculate - 1)
+        Math.max(0, sharedParams.termMonthsToCalculate - 1),
+        interestModelingOptions
       );
       sharedParams = updatedSharedParams;
       schedule.push(...loanSchedule);
@@ -511,13 +573,19 @@ function getNextEarlyRepayment(
   return nextRepayments;
 }
 
+interface InterestModelingOptions {
+  fullInterestModeling: boolean;
+  interestModelingHorizonMonths?: number;
+}
+
 function applyEarlyRepayments(
   sharedParams: LoanCalcSharedParams,
   orderedEarlyRepayments: EarlyRepaymentRecord[],
   issueDate: Date,
   paymentDayNumber: number,
   moveHolidayToNextDay: boolean,
-  periodsRemainingForRecompute: number
+  periodsRemainingForRecompute: number,
+  interestModelingOptions: InterestModelingOptions
 ): {
   updatedSharedParams: LoanCalcSharedParams;
   loanSchedule: LoanScheduleEntry[];
@@ -536,7 +604,8 @@ function applyEarlyRepayments(
       issueDate,
       paymentDayNumber,
       moveHolidayToNextDay,
-      periodsRemainingForRecompute
+      periodsRemainingForRecompute,
+      interestModelingOptions
     );
     updatedSharedParams = result.updatedSharedParams;
     loanSchedule.push(...result.loanSchedule);
@@ -566,7 +635,8 @@ function applyEarlyRepayment(
   issueDate: Date,
   paymentDayNumber: number,
   moveHolidayToNextDay: boolean,
-  periodsRemainingForRecompute: number
+  periodsRemainingForRecompute: number,
+  interestModelingOptions: InterestModelingOptions
 ): {
   updatedSharedParams: LoanCalcSharedParams;
   loanSchedule: LoanScheduleEntry[];
@@ -627,24 +697,83 @@ function applyEarlyRepayment(
   });
 
   if (sharedParams.loanType === "ANNUITY") {
+    // Точный (goal-seek) расчёт должен начинаться с даты самого досрочного
+    // платежа: ниже (после этого блока) currentDate безусловно
+    // перезаписывается на earlyRepayment.earlyRepaymentDate, и именно от
+    // неё отсчитывается начисление процентов для ВСЕХ последующих периодов
+    // (включая ещё не списанный текущий регулярный платёж, если досрочный
+    // платёж пришёлся строго до nextDate - его окно становится
+    // [earlyRepaymentDate, nextDate), а не полным месяцем). Используется и
+    // для пересчёта платежа (DECREASE_PAYMENT), и для симуляции сокращения
+    // срока (DECREASE_TERM).
+    const goalSeekStartDate = earlyRepayment.earlyRepaymentDate;
+
     if (earlyRepayment.repaymentType === "DECREASE_PAYMENT") {
-      updatedSharedParams.annuityMonthlyPayment =
-        recalculateAnnuityPaymentAfterPrepayment({
-          remainingPrincipal: updatedSharedParams.remainingPrincipal,
-          monthlyInterestRate: sharedParams.monthlyInterestRate,
-          periodsRemaining: periodsRemainingForRecompute,
-          roundingDecimals: sharedParams.roundingDecimals,
-        });
+      if (interestModelingOptions.fullInterestModeling) {
+        updatedSharedParams.annuityMonthlyPayment =
+          calculateAnnuityPaymentForSchedule({
+            principal: updatedSharedParams.remainingPrincipal,
+            annualInterestRatePercent: sharedParams.annualInterestRatePercent,
+            dayCountBasis: sharedParams.dayCountBasis,
+            startDate: goalSeekStartDate,
+            paymentDayNumber,
+            moveHolidayToNextDay,
+            termMonths: periodsRemainingForRecompute,
+            roundingDecimals: sharedParams.roundingDecimals,
+            horizonMonths: interestModelingOptions.interestModelingHorizonMonths,
+          });
+      } else {
+        updatedSharedParams.annuityMonthlyPayment =
+          recalculateAnnuityPaymentAfterPrepayment({
+            remainingPrincipal: updatedSharedParams.remainingPrincipal,
+            monthlyInterestRate: sharedParams.monthlyInterestRate,
+            periodsRemaining: periodsRemainingForRecompute,
+            roundingDecimals: sharedParams.roundingDecimals,
+          });
+      }
     } else if (
       earlyRepayment.repaymentType === "DECREASE_TERM" &&
       principalAmountPaid > 0
     ) {
-      const monthsReduction = calculateMonthsReduction(
-        principalAmountPaid,
-        sharedParams.remainingPrincipal,
-        sharedParams.monthlyInterestRate,
-        sharedParams.annuityMonthlyPayment
-      );
+      // Банк не пересчитывает сумму фиксированного платежа при DECREASE_TERM
+      // (иначе это было бы DECREASE_PAYMENT) - но если досрочка пришлась
+      // строго до даты ближайшего регулярного платежа, тот платёж всё равно
+      // не останется равным annuityMonthlyPayment: банк "возвращает" в виде
+      // уменьшения суммы платежа проценты, которые набежали бы на списанную
+      // часть долга (principalAmountPaid), останься она в теле кредита до
+      // даты платежа, а не до даты самой досрочки. Без этой поправки
+      // ближайший регулярный платёж после такой досрочки завышен ровно на
+      // accruedInterest + delayedInterest.
+      const delayedInterest = calculateAccruedInterest({
+        principal: principalAmountPaid,
+        annualInterestRatePercent: sharedParams.annualInterestRatePercent,
+        dayCountBasis: sharedParams.dayCountBasis,
+        fromDate: earlyRepayment.earlyRepaymentDate,
+        toDate: sharedParams.nextDate,
+        roundingDecimals: sharedParams.roundingDecimals,
+      });
+      updatedSharedParams.pendingInterestAdjustment =
+        sharedParams.pendingInterestAdjustment + accruedInterest + delayedInterest;
+
+      // Пересчёт срока для DECREASE_TERM - тем же методом, что и сам
+      // аннуитетный платёж. Для ANNUITY завершение графика
+      // управляется остатком долга (isFinalPayment), а не этим счётчиком, так
+      // что его точность не критична для сумм платежей - но она важна, если
+      // позже случится DECREASE_PAYMENT: он пересчитывает платёж на
+      // periodsRemainingForRecompute периодов, унаследованный от
+      // termMonthsToCalculate.
+      const monthsReduction = calculateMonthsReductionForSchedule({
+        remainingPrincipalBefore: sharedParams.remainingPrincipal,
+        remainingPrincipalAfter: updatedSharedParams.remainingPrincipal,
+        annuityMonthlyPayment: sharedParams.annuityMonthlyPayment,
+        annualInterestRatePercent: sharedParams.annualInterestRatePercent,
+        dayCountBasis: sharedParams.dayCountBasis,
+        beforeStartDate: sharedParams.currentDate,
+        afterStartDate: earlyRepayment.earlyRepaymentDate,
+        paymentDayNumber,
+        moveHolidayToNextDay,
+        fullInterestModeling: interestModelingOptions.fullInterestModeling,
+      });
 
       if (monthsReduction > 0) {
         updatedSharedParams.remainingTermMonths = Math.max(
@@ -737,7 +866,8 @@ function applyEarlyRepayment(
       issueDate,
       paymentDayNumber,
       moveHolidayToNextDay,
-      periodsRemainingForRecompute
+      periodsRemainingForRecompute,
+      interestModelingOptions
     );
     loanSchedule.push(...nextRepayment.loanSchedule);
     updatedSharedParams = nextRepayment.updatedSharedParams;

@@ -5,7 +5,7 @@ import * as RechartsPrimitive from "recharts"
 
 import { cn } from "@/lib/utils"
 
-// Format: { THEME_NAME: CSS_SELECTOR }
+// Формат: { THEME_NAME: CSS_SELECTOR }
 const THEMES = { light: "", dark: ".dark" } as const
 
 export type ChartConfig = {
@@ -111,7 +111,7 @@ const ChartTooltipContent = React.forwardRef<
       indicator?: "line" | "dot" | "dashed"
       nameKey?: string
       labelKey?: string
-      /** Formats a row's numeric value. Defaults to value.toLocaleString(). */
+      /** Форматирует числовое значение строки. По умолчанию value.toLocaleString(). */
       valueFormatter?: (value: number) => string
     }
 >(
@@ -321,7 +321,7 @@ const ChartLegendContent = React.forwardRef<
 )
 ChartLegendContent.displayName = "ChartLegend"
 
-// Helper to extract item config from a payload.
+// Вспомогательная функция для извлечения конфига элемента из payload.
 function getPayloadConfigFromPayload(
   config: ChartConfig,
   payload: unknown,
